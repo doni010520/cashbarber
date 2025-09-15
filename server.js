@@ -84,7 +84,7 @@ async function checkAvailability(page, professionalName, date) {
     
     await delay(3000);
     
-    const disponibilidade = await page.evaluate((profName) => {
+    const disponibilidade = await page.evaluate((profName, dataParam) => { // Adicionar dataParam aqui
       // Mapear profissionais para índices de coluna
       const profissionaisOrdem = ['Bruno Oliveira', 'Miguel Oliveira', 'Maicon Fraga'];
       
@@ -166,13 +166,13 @@ async function checkAvailability(page, professionalName, date) {
       return {
         success: true,
         profissional: profissionaisOrdem[profIndex],
-        data: date,
+        data: dataParam, // Usar dataParam em vez de date
         horariosLivres: horariosLivres,
         periodosOcupados: periodosOcupados,
         totalLivres: horariosLivres.length,
         totalPeriodosOcupados: periodosOcupados.length
       };
-    }, professionalName);
+    }, professionalName, date); // Passar date como segundo argumento
     
     return disponibilidade;
     
@@ -184,7 +184,6 @@ async function checkAvailability(page, professionalName, date) {
     };
   }
 }
-
 // ========== CRIAR AGENDAMENTO ==========
 async function createBooking(page, bookingData) {
   try {
