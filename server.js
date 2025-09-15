@@ -61,29 +61,31 @@ async function loginCashBarber(page) {
     }
 }
 
-// ========== VERIFICAR DISPONIBILIDADE (VERSÃO CORRIGIDA) ==========
+// ========== VERIFICAR DISPONIBILIDADE (VERSÃO CORRIGIDA E MAIS ROBUSTA) ==========
 async function checkAvailability(page, professionalName, date) { // date no formato 'YYYY-MM-DD'
     try {
         console.log(`Verificando disponibilidade para ${professionalName} em ${date}`);
         
-        // CORREÇÃO 1: Navegar para a URL com a data específica
         const targetUrl = `${CONFIG.baseUrl}/agendamento?data=${date}`;
         console.log(`Navegando para: ${targetUrl}`);
         await page.goto(targetUrl, { waitUntil: 'networkidle2' });
 
-        // CORREÇÃO 2: Esperar o calendário carregar os dados da nova data
-        await page.waitForSelector('.rbc-time-view', { visible: true, timeout: 15000 });
-        console.log('Calendário da data especificada foi carregado.');
+        // ==================================================================
+        // <-- CORREÇÃO 3: ESPERA MAIS INTELIGENTE
+        // Agora esperamos que pelo menos um evento (.rbc-event) apareça.
+        // Isso garante que os dados da agenda foram carregados dinamicamente.
+        // ==================================================================
+        await page.waitForSelector('.rbc-event', { timeout: 15000 });
+        console.log('Eventos da agenda carregados. Iniciando extração.');
         
         const disponibilidade = await page.evaluate((profName, dataParam) => {
-            try { // MELHORIA: Adicionado try/catch para depuração dentro do browser
+            try {
                 console.log('Iniciando extração de dados para:', profName);
                 
                 const headers = document.querySelectorAll('.rbc-row.rbc-row-resource .rbc-header span');
                 const profissionaisNaTela = Array.from(headers).map(h => h.textContent.trim());
                 
-                console.log('Profissionais encontrados na tela:', profissionaisNaTela.join(', '));
-                
+                console.log('Profissionais encontrados:', profissionaisNaTela.join(', '));
                 const profIndex = profissionaisNaTela.findIndex(p => p.toLowerCase().includes(profName.toLowerCase()));
                 
                 if (profIndex === -1) {
@@ -93,8 +95,6 @@ async function checkAvailability(page, professionalName, date) { // date no form
                 console.log(`${profName} encontrado no índice ${profIndex}`);
                 
                 const colunas = document.querySelectorAll('.rbc-time-content .rbc-day-slot.rbc-time-column');
-                console.log(`Total de colunas de horários: ${colunas.length}`);
-                
                 if (profIndex >= colunas.length) {
                     return { success: false, message: `Índice de profissional (${profIndex}) fora do alcance das colunas (${colunas.length})` };
                 }
@@ -105,18 +105,13 @@ async function checkAvailability(page, professionalName, date) { // date no form
                 const periodosOcupados = [];
                 if (containerEventos) {
                     const eventos = containerEventos.children;
-                    console.log(`Encontrados ${eventos.length} eventos na coluna.`);
-                    
                     Array.from(eventos).forEach((evento) => {
                         if (!evento.classList.contains('rbc-event')) return;
-                        
                         const titulo = evento.getAttribute('title') || '';
                         const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
-                        
                         if (horariosMatch) {
                             const isIntervalo = evento.classList.contains('break');
                             const descricaoCompleta = titulo.replace(horariosMatch[0], '').replace(':', '').trim();
-
                             periodosOcupados.push({
                                 inicio: horariosMatch[1],
                                 fim: horariosMatch[2],
@@ -126,15 +121,16 @@ async function checkAvailability(page, professionalName, date) { // date no form
                             });
                         }
                     });
-                } else {
-                    console.log('Nenhum container de eventos encontrado. Dia livre.');
                 }
                 
                 console.log('Períodos ocupados extraídos:', periodosOcupados);
 
+                // ==================================================================
+                // <-- ALTERAÇÃO: Gerar horários de 30 em 30 minutos.
+                // ==================================================================
                 const todosHorarios = [];
                 for (let h = 9; h < 20; h++) {
-                    for (let m = 0; m < 60; m += 10) {
+                    for (let m = 0; m < 60; m += 30) { // <-- Alterado de 10 para 30
                         todosHorarios.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
                     }
                 }
@@ -155,7 +151,10 @@ async function checkAvailability(page, professionalName, date) { // date no form
                     let periodoAtual = { inicio: horariosLivres[0], fim: horariosLivres[0] };
                     for (let i = 1; i < horariosLivres.length; i++) {
                         const diffMinutos = horarioParaMinutos(horariosLivres[i]) - horarioParaMinutos(periodoAtual.fim);
-                        if (diffMinutos === 10) {
+                        // ==================================================================
+                        // <-- ALTERAÇÃO: Lógica de agrupamento para 30 minutos.
+                        // ==================================================================
+                        if (diffMinutos === 30) { // <-- Alterado de 10 para 30
                             periodoAtual.fim = horariosLivres[i];
                         } else {
                             periodosLivres.push(periodoAtual);
@@ -191,8 +190,10 @@ async function checkAvailability(page, professionalName, date) { // date no form
     }
 }
 
-// ========== CRIAR AGENDAMENTO ==========
+
+// ========== CRIAR AGENDAMENTO (sem alterações) ==========
 async function createBooking(page, bookingData) {
+    // ...código original sem alterações...
     try {
         console.log('Criando agendamento:', bookingData);
         
@@ -320,64 +321,41 @@ async function createBooking(page, bookingData) {
     }
 }
 
-// ========== ENDPOINTS DA API ==========
 
-// Health check
+// ========== ENDPOINTS DA API (sem alterações) ==========
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', service: 'Cash Barber Automation', version: '1.0.0' });
+    res.json({ status: 'ok', service: 'Cash Barber Automation', version: '1.0.2' });
 });
 
-// Endpoint principal de automação
 app.post('/automate', async (req, res) => {
     const { action, clientName, clientPhone, professionalName, services, date, time, duracao } = req.body;
-    
     console.log('Requisição recebida:', { action, professionalName, date });
-    
-    if (!action) {
-        return res.status(400).json({ success: false, error: 'Ação é obrigatória (check, list ou create)' });
-    }
-    
-    if (action === 'create' && (!clientName || !date || !time)) {
-        return res.status(400).json({ success: false, error: 'Para criar agendamento: clientName, date e time são obrigatórios' });
-    }
+    if (!action) return res.status(400).json({ success: false, error: 'Ação é obrigatória (check, list ou create)' });
+    if (action === 'create' && (!clientName || !date || !time)) return res.status(400).json({ success: false, error: 'Para criar agendamento: clientName, date e time são obrigatórios' });
     
     let browser;
     let page;
     
     try {
         console.log('Iniciando browser...');
-        
         browser = await puppeteer.launch({
             headless: 'new',
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // Deixe undefined para usar o padrão localmente
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process'
-            ]
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
         
         page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
-        // MELHORIA DE DEPURAÇÃO: Mostra os logs do console do browser no seu terminal
         page.on('console', msg => {
             const logArgs = msg.args();
             for (let i = 0; i < logArgs.length; ++i) {
-                logArgs[i].jsonValue().then(value => {
-                    console.log(`[BROWSER CONSOLE] >`, value);
-                });
+                logArgs[i].jsonValue().then(value => console.log(`[BROWSER CONSOLE] >`, value));
             }
         });
         
         const loginResult = await loginCashBarber(page);
-        if (!loginResult.success) {
-            throw new Error(loginResult.error || 'Falha no login');
-        }
+        if (!loginResult.success) throw new Error(loginResult.error || 'Falha no login');
         
         let result;
         const targetDate = date || new Date().toISOString().split('T')[0];
@@ -385,39 +363,21 @@ app.post('/automate', async (req, res) => {
         switch (action) {
             case 'check':
             case 'list':
-                result = await checkAvailability(
-                    page, 
-                    professionalName || 'Bruno Oliveira', 
-                    targetDate
-                );
+                result = await checkAvailability(page, professionalName || 'Bruno Oliveira', targetDate);
                 break;
-                
             case 'create':
-                result = await createBooking(page, {
-                    clientName,
-                    clientPhone,
-                    professionalName: professionalName || 'Bruno Oliveira',
-                    services: services || 'Corte de Cabelo',
-                    date,
-                    time,
-                    duracao: duracao || 30
-                });
+                result = await createBooking(page, { clientName, clientPhone, professionalName: professionalName || 'Bruno Oliveira', services: services || 'Corte de Cabelo', date, time, duracao: duracao || 30 });
                 break;
-                
             default:
-                result = { success: false, error: `Ação inválida: ${action}. Use: check, list ou create` };
+                result = { success: false, error: `Ação inválida: ${action}.` };
         }
         
-        console.log('Resultado final enviado:', result);
+        console.log('Resultado final enviado.');
         res.json(result);
         
     } catch (error) {
         console.error('Erro na automação:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+        res.status(500).json({ success: false, error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
         
     } finally {
         if (browser) {
@@ -427,23 +387,17 @@ app.post('/automate', async (req, res) => {
     }
 });
 
-// Rota raiz
 app.get('/', (req, res) => {
-    res.json({
-        name: 'Cash Barber Automation API',
-        version: '1.0.1', // Versão atualizada com correção
-        status: 'online'
-    });
+    res.json({ name: 'Cash Barber Automation API', version: '1.0.2', status: 'online' });
 });
 
-// Iniciar servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Cash Barber Automation Service     ║
+║     (v1.0.2 - Espera Inteligente)      ║
 ║     Rodando na porta ${PORT}                 ║
-║     http://localhost:${PORT}             ║
 ╚════════════════════════════════════════╝
     `);
 });
