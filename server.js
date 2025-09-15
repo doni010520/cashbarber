@@ -61,8 +61,8 @@ async function loginCashBarber(page) {
     }
 }
 
-// ========== VERIFICAR DISPONIBILIDADE (VERSÃO CORRIGIDA E MAIS ROBUSTA) ==========
-async function checkAvailability(page, professionalName, date) { // date no formato 'YYYY-MM-DD'
+// ========== VERIFICAR DISPONIBILIDADE (COM DIAGNÓSTICO) ==========
+async function checkAvailability(page, professionalName, date) {
     try {
         console.log(`Verificando disponibilidade para ${professionalName} em ${date}`);
         
@@ -70,34 +70,29 @@ async function checkAvailability(page, professionalName, date) { // date no form
         console.log(`Navegando para: ${targetUrl}`);
         await page.goto(targetUrl, { waitUntil: 'networkidle2' });
 
-        // ==================================================================
-        // <-- CORREÇÃO 3: ESPERA MAIS INTELIGENTE
-        // Agora esperamos que pelo menos um evento (.rbc-event) apareça.
-        // Isso garante que os dados da agenda foram carregados dinamicamente.
-        // ==================================================================
         await page.waitForSelector('.rbc-event', { timeout: 15000 });
         console.log('Eventos da agenda carregados. Iniciando extração.');
+        
+        // ==================================================================
+        // <-- DIAGNÓSTICO FINAL: Tira uma foto da tela do robô
+        // ==================================================================
+        await page.screenshot({ path: 'diagnostico_agenda.png', fullPage: true });
+        console.log('!!! Screenshot de diagnóstico salvo como diagnostico_agenda.png !!!');
         
         const disponibilidade = await page.evaluate((profName, dataParam) => {
             try {
                 console.log('Iniciando extração de dados para:', profName);
-                
                 const headers = document.querySelectorAll('.rbc-row.rbc-row-resource .rbc-header span');
                 const profissionaisNaTela = Array.from(headers).map(h => h.textContent.trim());
-                
                 console.log('Profissionais encontrados:', profissionaisNaTela.join(', '));
                 const profIndex = profissionaisNaTela.findIndex(p => p.toLowerCase().includes(profName.toLowerCase()));
                 
-                if (profIndex === -1) {
-                    return { success: false, message: `Profissional ${profName} não encontrado`, profissionaisDisponiveis: profissionaisNaTela };
-                }
+                if (profIndex === -1) return { success: false, message: `Profissional ${profName} não encontrado`, profissionaisDisponiveis: profissionaisNaTela };
                 
                 console.log(`${profName} encontrado no índice ${profIndex}`);
                 
                 const colunas = document.querySelectorAll('.rbc-time-content .rbc-day-slot.rbc-time-column');
-                if (profIndex >= colunas.length) {
-                    return { success: false, message: `Índice de profissional (${profIndex}) fora do alcance das colunas (${colunas.length})` };
-                }
+                if (profIndex >= colunas.length) return { success: false, message: `Índice de profissional (${profIndex}) fora do alcance das colunas (${colunas.length})` };
                 
                 const colunaProf = colunas[profIndex];
                 const containerEventos = colunaProf.querySelector('.rbc-events-container');
@@ -125,12 +120,9 @@ async function checkAvailability(page, professionalName, date) { // date no form
                 
                 console.log('Períodos ocupados extraídos:', periodosOcupados);
 
-                // ==================================================================
-                // <-- ALTERAÇÃO: Gerar horários de 30 em 30 minutos.
-                // ==================================================================
                 const todosHorarios = [];
                 for (let h = 9; h < 20; h++) {
-                    for (let m = 0; m < 60; m += 30) { // <-- Alterado de 10 para 30
+                    for (let m = 0; m < 60; m += 30) {
                         todosHorarios.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
                     }
                 }
@@ -151,10 +143,7 @@ async function checkAvailability(page, professionalName, date) { // date no form
                     let periodoAtual = { inicio: horariosLivres[0], fim: horariosLivres[0] };
                     for (let i = 1; i < horariosLivres.length; i++) {
                         const diffMinutos = horarioParaMinutos(horariosLivres[i]) - horarioParaMinutos(periodoAtual.fim);
-                        // ==================================================================
-                        // <-- ALTERAÇÃO: Lógica de agrupamento para 30 minutos.
-                        // ==================================================================
-                        if (diffMinutos === 30) { // <-- Alterado de 10 para 30
+                        if (diffMinutos === 30) {
                             periodoAtual.fim = horariosLivres[i];
                         } else {
                             periodosLivres.push(periodoAtual);
@@ -164,19 +153,7 @@ async function checkAvailability(page, professionalName, date) { // date no form
                     periodosLivres.push(periodoAtual);
                 }
 
-                return {
-                    success: true,
-                    profissional: profName,
-                    data: dataParam,
-                    horariosLivres,
-                    periodosLivres,
-                    periodosOcupados,
-                    resumo: {
-                        temDisponibilidade: horariosLivres.length > 0,
-                        proximoHorarioLivre: horariosLivres[0] || null,
-                        periodosLivresContinuos: periodosLivres
-                    }
-                };
+                return { success: true, profissional: profName, data: dataParam, horariosLivres, periodosLivres, periodosOcupados, resumo: { temDisponibilidade: horariosLivres.length > 0, proximoHorarioLivre: horariosLivres[0] || null, periodosLivresContinuos: periodosLivres } };
             } catch (e) {
                 return { success: false, error: e.message, stack: e.stack };
             }
@@ -191,89 +168,42 @@ async function checkAvailability(page, professionalName, date) { // date no form
 }
 
 
-// ========== CRIAR AGENDAMENTO (sem alterações) ==========
+// ========== CRIAR AGENDAMENTO ==========
 async function createBooking(page, bookingData) {
-    // ...código original sem alterações...
     try {
         console.log('Criando agendamento:', bookingData);
         
         const disponibilidade = await checkAvailability(page, bookingData.professionalName, bookingData.date);
-        if (!disponibilidade.success) {
-            return disponibilidade;
-        }
+        if (!disponibilidade.success) return disponibilidade;
         
-        if (!disponibilidade.horariosLivres.includes(bookingData.time)) {
-            return {
-                success: false,
-                message: `Horário ${bookingData.time} não está disponível`,
-                horariosLivres: disponibilidade.horariosLivres,
-                sugestao: disponibilidade.horariosLivres.length > 0 
-                    ? `Horários disponíveis: ${disponibilidade.horariosLivres.slice(0, 5).join(', ')}`
-                    : 'Nenhum horário disponível nesta data'
-            };
-        }
+        if (!disponibilidade.horariosLivres.includes(bookingData.time)) return { success: false, message: `Horário ${bookingData.time} não está disponível`, horariosLivres: disponibilidade.horariosLivres, sugestao: disponibilidade.horariosLivres.length > 0 ? `Horários disponíveis: ${disponibilidade.horariosLivres.slice(0, 5).join(', ')}` : 'Nenhum horário disponível nesta data' };
         
-        const btnNovo = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b => b.textContent.trim().includes('Novo agendamento'));
-        });
-        
-        if (!btnNovo) {
-            throw new Error('Botão "Novo agendamento" não encontrado');
-        }
+        const btnNovo = await page.evaluateHandle(() => { const buttons = Array.from(document.querySelectorAll('button')); return buttons.find(b => b.textContent.trim().includes('Novo agendamento')); });
+        if (!btnNovo) throw new Error('Botão "Novo agendamento" não encontrado');
         
         await btnNovo.click();
-        await delay(2000);
-        
         await page.waitForSelector('#age_id_cliente', { visible: true, timeout: 5000 });
         
         const selects = await page.$$('select');
-        
-        if (selects[0]) {
-            await selects[0].select('Agendamento');
-        }
+        if (selects[0]) await selects[0].select('Agendamento');
         
         await page.click('#age_id_cliente');
         await page.type('#age_id_cliente', bookingData.clientName);
-        await delay(1000);
+        await delay(1500);
         
-        await page.evaluate((dateValue) => {
-            const dateInput = document.querySelector('input[name="age_data"]');
-            if (dateInput) {
-                dateInput.value = dateValue;
-                dateInput.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }, bookingData.date);
-        
-        await page.evaluate((timeValue) => {
-            const timeInput = document.querySelector('input[name="age_inicio"]');
-            if (timeInput) {
-                timeInput.value = timeValue;
-                timeInput.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }, bookingData.time);
+        await page.evaluate((dateValue) => { const dateInput = document.querySelector('input[name="age_data"]'); if (dateInput) { dateInput.value = dateValue; dateInput.dispatchEvent(new Event('change', { bubbles: true })); } }, bookingData.date);
+        await page.evaluate((timeValue) => { const timeInput = document.querySelector('input[name="age_inicio"]'); if (timeInput) { timeInput.value = timeValue; timeInput.dispatchEvent(new Event('change', { bubbles: true })); } }, bookingData.time);
         
         const [hora, minuto] = bookingData.time.split(':').map(Number);
         const duracao = bookingData.duracao || 30;
         const totalMinutos = hora * 60 + minuto + duracao;
         const horaFim = `${Math.floor(totalMinutos / 60).toString().padStart(2, '0')}:${(totalMinutos % 60).toString().padStart(2, '0')}`;
+        await page.evaluate((timeValue) => { const timeInput = document.querySelector('input[name="age_fim"]'); if (timeInput) { timeInput.value = timeValue; timeInput.dispatchEvent(new Event('change', { bubbles: true })); } }, horaFim);
         
-        await page.evaluate((timeValue) => {
-            const timeInput = document.querySelector('input[name="age_fim"]');
-            if (timeInput) {
-                timeInput.value = timeValue;
-                timeInput.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }, horaFim);
-        
-        if (selects[2]) {
-            await selects[2].select(CONFIG.filialId);
-        }
+        if (selects[2]) await selects[2].select(CONFIG.filialId);
         
         const professionalId = CONFIG.profissionais[bookingData.professionalName] || CONFIG.profissionais[bookingData.professionalName.toLowerCase()] || '73';
-        if (selects[3]) {
-            await selects[3].select(professionalId);
-        }
+        if (selects[3]) await selects[3].select(professionalId);
         
         if (bookingData.services) {
             await page.click('#id_usuario_servico');
@@ -281,39 +211,19 @@ async function createBooking(page, bookingData) {
             await delay(1000);
         }
         
-        await delay(1000);
-        
-        const btnSalvar = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b => b.textContent.toLowerCase().includes('salvar'));
-        });
-        
-        if (btnSalvar) {
-            await btnSalvar.click();
-        } else {
-            await page.click('button[type="submit"]');
-        }
+        const btnSalvar = await page.evaluateHandle(() => { const buttons = Array.from(document.querySelectorAll('button')); return buttons.find(b => b.textContent.toLowerCase().includes('salvar')); });
+        if (btnSalvar) await btnSalvar.click();
+        else await page.click('button[type="submit"]');
         
         await delay(3000);
         
-        const hasError = await page.$$('.alert-danger, .error-message');
-        if (hasError && hasError.length > 0) {
-            const errorText = await hasError[0].evaluate(el => el.textContent);
+        const hasError = await page.$('.swal2-validation-message, .alert-danger');
+        if (hasError) {
+            const errorText = await hasError.evaluate(el => el.textContent);
             throw new Error(`Erro ao salvar: ${errorText}`);
         }
         
-        return {
-            success: true,
-            message: 'Agendamento criado com sucesso!',
-            agendamento: {
-                cliente: bookingData.clientName,
-                telefone: bookingData.clientPhone,
-                profissional: bookingData.professionalName,
-                data: bookingData.date,
-                horario: `${bookingData.time} - ${horaFim}`,
-                servico: bookingData.services
-            }
-        };
+        return { success: true, message: 'Agendamento criado com sucesso!', agendamento: { cliente: bookingData.clientName, telefone: bookingData.clientPhone, profissional: bookingData.professionalName, data: bookingData.date, horario: `${bookingData.time} - ${horaFim}`, servico: bookingData.services } };
         
     } catch (error) {
         console.error('Erro ao criar agendamento:', error);
@@ -321,30 +231,25 @@ async function createBooking(page, bookingData) {
     }
 }
 
-
-// ========== ENDPOINTS DA API (sem alterações) ==========
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', service: 'Cash Barber Automation', version: '1.0.2' });
-});
+// ========== ENDPOINTS DA API ==========
+app.get('/health', (req, res) => res.json({ status: 'ok', service: 'Cash Barber Automation', version: '1.0.3-diag' }));
 
 app.post('/automate', async (req, res) => {
     const { action, clientName, clientPhone, professionalName, services, date, time, duracao } = req.body;
     console.log('Requisição recebida:', { action, professionalName, date });
-    if (!action) return res.status(400).json({ success: false, error: 'Ação é obrigatória (check, list ou create)' });
-    if (action === 'create' && (!clientName || !date || !time)) return res.status(400).json({ success: false, error: 'Para criar agendamento: clientName, date e time são obrigatórios' });
+    if (!action) return res.status(400).json({ success: false, error: 'Ação é obrigatória' });
+    if (action === 'create' && (!clientName || !date || !time)) return res.status(400).json({ success: false, error: 'clientName, date e time são obrigatórios' });
     
     let browser;
-    let page;
-    
     try {
         console.log('Iniciando browser...');
         browser = await puppeteer.launch({
             headless: 'new',
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1366,768']
         });
         
-        page = await browser.newPage();
+        const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
         page.on('console', msg => {
@@ -387,16 +292,14 @@ app.post('/automate', async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => {
-    res.json({ name: 'Cash Barber Automation API', version: '1.0.2', status: 'online' });
-});
+app.get('/', (req, res) => res.json({ name: 'Cash Barber Automation API', version: '1.0.3-diag', status: 'online' }));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Cash Barber Automation Service     ║
-║     (v1.0.2 - Espera Inteligente)      ║
+║     (v1.0.3 - MODO DIAGNÓSTICO)        ║
 ║     Rodando na porta ${PORT}                 ║
 ╚════════════════════════════════════════╝
     `);
