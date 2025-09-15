@@ -86,39 +86,37 @@ async function checkAvailability(page, professionalName, date) {
     const disponibilidade = await page.evaluate((profName, dataParam) => {
       console.log('Procurando por:', profName);
       
-      // Mapear profissionais baseado na ordem visual no calendário
-      const profissionaisMap = {
-        'Bruno Oliveira': 0,
-        'bruno': 0,
-        'Bruno': 0,
-        'Miguel Oliveira': 1,
-        'miguel': 1,
-        'Miguel': 1,
-        'Maicon Fraga': 2,
-        'maicon': 2,
-        'Maicon': 2
-      };
+      // Primeiro, vamos verificar os headers para confirmar a ordem dos profissionais
+      const headers = document.querySelectorAll('.rbc-row.rbc-row-resource .rbc-header span');
+      const profissionaisNaTela = [];
+      headers.forEach((header, idx) => {
+        const texto = header.textContent.trim();
+        console.log(`Header ${idx}: ${texto}`);
+        profissionaisNaTela.push(texto);
+      });
       
-      // Encontrar índice do profissional
+      // Encontrar o índice correto baseado nos headers
       let profIndex = -1;
-      for (const key in profissionaisMap) {
-        if (profName.toLowerCase().includes(key.toLowerCase()) || 
-            key.toLowerCase().includes(profName.toLowerCase())) {
-          profIndex = profissionaisMap[key];
-          break;
+      profissionaisNaTela.forEach((prof, idx) => {
+        if (prof.toLowerCase().includes(profName.toLowerCase()) || 
+            profName.toLowerCase().includes(prof.toLowerCase())) {
+          profIndex = idx;
         }
-      }
+      });
       
       if (profIndex === -1) {
         return { 
           success: false, 
-          message: `Profissional ${profName} não encontrado`
+          message: `Profissional ${profName} não encontrado`,
+          profissionaisDisponiveis: profissionaisNaTela
         };
       }
       
-      // Selecionar a coluna correta
+      console.log(`${profName} encontrado no índice ${profIndex}`);
+      
+      // Agora pegar a coluna correta
       const colunas = document.querySelectorAll('.rbc-day-slot.rbc-time-column');
-      console.log(`Total de colunas encontradas: ${colunas.length}`);
+      console.log(`Total de colunas: ${colunas.length}`);
       
       if (profIndex >= colunas.length) {
         return {
@@ -129,17 +127,16 @@ async function checkAvailability(page, professionalName, date) {
       
       const colunaProf = colunas[profIndex];
       
-      // Buscar eventos dentro do container de eventos da coluna
+      // Debug: verificar o conteúdo da coluna
       const containerEventos = colunaProf.querySelector('.rbc-events-container');
       if (!containerEventos) {
-        // Se não há container de eventos, significa que não há eventos
-        console.log('Nenhum evento encontrado - dia completamente livre');
+        console.log('Nenhum container de eventos - dia livre');
         const todosHorarios = [];
         for(let h = 9; h < 20; h++) {
-          todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
-          todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
+          for(let m = 0; m < 60; m += 10) {
+            todosHorarios.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+          }
         }
-        
         return {
           success: true,
           profissional: profName,
@@ -151,105 +148,104 @@ async function checkAvailability(page, professionalName, date) {
         };
       }
       
-      const eventos = containerEventos.querySelectorAll('.rbc-event');
-      console.log(`Eventos encontrados para ${profName}: ${eventos.length}`);
+      // Pegar APENAS os eventos diretos desta coluna
+      const eventos = containerEventos.children;
+      console.log(`Total de eventos na coluna: ${eventos.length}`);
       
       const periodosOcupados = [];
       
-      eventos.forEach((evento, idx) => {
+      // Processar cada evento
+      Array.from(eventos).forEach((evento, idx) => {
+        // Verificar se é realmente um evento
+        if (!evento.classList.contains('rbc-event')) {
+          return;
+        }
+        
         const titulo = evento.getAttribute('title') || '';
-        console.log(`Evento ${idx}: ${titulo}`);
+        const style = evento.getAttribute('style') || '';
+        
+        console.log(`Evento ${idx}:`);
+        console.log(`  Título: ${titulo}`);
+        console.log(`  Classes: ${Array.from(evento.classList).join(', ')}`);
+        console.log(`  Style: ${style}`);
         
         // Extrair horários do título
         const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
         
         if (horariosMatch) {
-          // Verificar o tipo de evento pelas classes
           const isIntervalo = evento.classList.contains('break');
           const isAgendamento = evento.classList.contains('eventWithNoPlan') || 
                                evento.classList.contains('eventWithPlan');
           
-          // Extrair descrição do título (depois do segundo ":")
-          const partesTitulo = titulo.split(':');
-          let descricao = '';
-          if (partesTitulo.length >= 3) {
-            // Remove os dois primeiros elementos (horários) e junta o resto
-            descricao = partesTitulo.slice(2).join(':').trim();
-          }
+          // Pegar o texto depois dos horários
+          const partesTexto = titulo.split(/\d{2}:\d{2}\s*–\s*\d{2}:\d{2}:/);
+          const descricao = partesTexto[1] ? partesTexto[1].trim() : '';
           
           periodosOcupados.push({
             inicio: horariosMatch[1],
             fim: horariosMatch[2],
             tipo: isIntervalo ? 'intervalo' : 'agendamento',
-            descricao: descricao || (isIntervalo ? 'Intervalo/Bloqueio' : 'Agendamento'),
-            classes: Array.from(evento.classList)
+            descricao: descricao,
+            tituloCompleto: titulo
           });
         }
       });
       
-      console.log('Períodos ocupados encontrados:', periodosOcupados);
+      console.log('Períodos ocupados processados:', JSON.stringify(periodosOcupados, null, 2));
       
-      // Gerar todos os horários possíveis (09:00 às 20:00)
+      // Gerar horários de 10 em 10 minutos
       const todosHorarios = [];
       for(let h = 9; h < 20; h++) {
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:10`);
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:20`);
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:40`);
-        todosHorarios.push(`${h.toString().padStart(2, '0')}:50`);
+        for(let m = 0; m < 60; m += 10) {
+          todosHorarios.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+        }
       }
       
-      // Função auxiliar para converter horário em minutos
+      // Função para converter horário em minutos
       const horarioParaMinutos = (horario) => {
         const [h, m] = horario.split(':').map(Number);
         return h * 60 + m;
       };
       
-      // Verificar se horário está ocupado
-      const isHorarioOcupado = (horario) => {
+      // Filtrar horários livres
+      const horariosLivres = todosHorarios.filter(horario => {
         const minutosHorario = horarioParaMinutos(horario);
         
-        return periodosOcupados.some(periodo => {
+        const ocupado = periodosOcupados.some(periodo => {
           const minutosInicio = horarioParaMinutos(periodo.inicio);
           const minutosFim = horarioParaMinutos(periodo.fim);
           return minutosHorario >= minutosInicio && minutosHorario < minutosFim;
         });
-      };
+        
+        return !ocupado;
+      });
       
-      // Filtrar horários livres
-      const horariosLivres = todosHorarios.filter(h => !isHorarioOcupado(h));
-      
-      // Agrupar horários livres em períodos contínuos para melhor visualização
+      // Agrupar em períodos contínuos
       const periodosLivres = [];
       let periodoAtual = null;
       
-      for (let i = 0; i < horariosLivres.length; i++) {
-        const horario = horariosLivres[i];
-        const proximoHorario = horariosLivres[i + 1];
-        
+      horariosLivres.forEach((horario, i) => {
         if (!periodoAtual) {
           periodoAtual = { inicio: horario, fim: horario };
-        }
-        
-        // Verificar se o próximo horário é contínuo (diferença de 10, 20 ou 30 minutos)
-        if (proximoHorario) {
-          const diffMinutos = horarioParaMinutos(proximoHorario) - horarioParaMinutos(horario);
-          if (diffMinutos <= 30) {
-            periodoAtual.fim = proximoHorario;
+        } else {
+          const diffMinutos = horarioParaMinutos(horario) - horarioParaMinutos(periodoAtual.fim);
+          if (diffMinutos === 10) {
+            periodoAtual.fim = horario;
           } else {
             periodosLivres.push(periodoAtual);
-            periodoAtual = null;
+            periodoAtual = { inicio: horario, fim: horario };
           }
-        } else {
-          // Último horário
+        }
+        
+        if (i === horariosLivres.length - 1) {
           periodosLivres.push(periodoAtual);
         }
-      }
+      });
       
       return {
         success: true,
         profissional: profName,
+        profissionalIndex: profIndex,
         data: dataParam,
         horariosLivres: horariosLivres,
         periodosLivres: periodosLivres,
