@@ -1,17 +1,18 @@
 {
   "name": "cash-barber-automation",
   "version": "1.0.0",
-  "description": "Automação para Cash Barber usando Puppeteer",
+  "description": "Serviço para capturar token de autenticação do Cash Barber",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "puppeteer": "^21.0.0",
     "cors": "^2.8.5",
+    "puppeteer": "^21.0.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "axios": "^1.6.2"
   },
   "engines": {
     "node": ">=18.0.0"
