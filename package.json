@@ -12,6 +12,7 @@
     "cors": "^2.8.5",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "axios": "^1.6.0"
   },
   "engines": {
     "node": ">=18.0.0"
