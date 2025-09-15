@@ -20,22 +20,16 @@ const CONFIG = {
 };
 
 /**
- * Função principal que executa a automação para extrair o HTML
- * @param {string} date - Data no formato YYYY-MM-DD
+ * Função principal que navega para o próximo dia e extrai o HTML
  */
-async function getPageHTML(date) {
+async function getNextDayHTML() {
     let browser;
     try {
         console.log('Iniciando navegador em modo stealth...');
         browser = await puppeteer.launch({
             headless: 'new',
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu'
-            ]
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
 
         const page = await browser.newPage();
@@ -53,25 +47,37 @@ async function getPageHTML(date) {
         ]);
         console.log('Login bem-sucedido.');
 
-        // 2. Navegar para a data correta
-        const targetUrl = `${CONFIG.baseUrl}/agendamento?data=${date}`;
-        console.log(`Navegando para: ${targetUrl}`);
-        await page.goto(targetUrl, { waitUntil: 'networkidle2' });
+        // 2. Navegar para a página de agendamentos (vai carregar o dia de hoje)
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        console.log(`Navegando para a página de agendamentos: ${agendaUrl}`);
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.rbc-time-view', { visible: true, timeout: 15000 });
-        console.log('Página da agenda carregada.');
         
-        // Espera extra opcional para garantir a renderização completa
-        await new Promise(resolve => setTimeout(resolve, 2000)); 
+        const dataInicial = await page.$eval('.date-text', el => el.textContent.trim());
+        console.log(`Página carregada com a data inicial: ${dataInicial}`);
 
-        // 3. Extrair o HTML completo da página
+        // 3. Clicar no botão para avançar para o próximo dia
+        console.log('Clicando na seta para avançar o dia...');
+        const nextDayButtonSelector = '.arrow-buttons svg:last-child';
+        await page.waitForSelector(nextDayButtonSelector, { visible: true });
+        await page.click(nextDayButtonSelector);
+
+        // 4. Esperar a agenda recarregar após o clique
+        console.log('Aguardando a agenda do próximo dia carregar...');
+        await page.waitForNetworkIdle({ timeout: 10000 });
+
+        const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
+        console.log(`Nova data carregada: ${dataFinal}`);
+
+        // 5. Extrair o HTML completo da página final
         console.log('Extraindo o código HTML...');
         const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
         
         console.log('HTML extraído com sucesso.');
-        return { success: true, date: date, html: htmlContent };
+        return { success: true, date: dataFinal, html: htmlContent };
 
     } catch (error) {
-        console.error('ERRO DURANTE A EXTRAÇÃO DE HTML:', error);
+        console.error('ERRO DURANTE O PROCESSO:', error);
         throw error;
     } finally {
         if (browser) {
@@ -81,15 +87,10 @@ async function getPageHTML(date) {
     }
 }
 
-// Endpoint da API para executar a extração
-app.post('/extract-html', async (req, res) => {
-    const { date } = req.body;
-    if (!date) {
-        return res.status(400).json({ success: false, error: 'A data é obrigatória (formato YYYY-MM-DD)' });
-    }
-
+// Endpoint da API para executar a ação
+app.post('/get-next-day-html', async (req, res) => {
     try {
-        const result = await getPageHTML(date);
+        const result = await getNextDayHTML();
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -101,8 +102,8 @@ app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Serviço de Extração de HTML        ║
-║     Endpoint: POST /extract-html       ║
-║     Rodando na porta ${PORT}                 ║
+║     (Avançar 1 dia)                    ║
+║     Endpoint: POST /get-next-day-html  ║
 ╚════════════════════════════════════════╝
     `);
 });
