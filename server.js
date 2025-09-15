@@ -85,85 +85,86 @@ async function checkAvailability(page, professionalName, date) {
     await delay(3000);
     
     const disponibilidade = await page.evaluate((profName, dataParam) => {
-      // Debug: verificar estrutura
       console.log('Procurando por:', profName);
       
-      // Buscar headers com nomes dos profissionais
-      const headers = document.querySelectorAll('.rbc-header span');
+      // Encontrar a posição correta do profissional baseado nos headers
+      const headerContainers = document.querySelectorAll('.rbc-time-header-content');
       let profIndex = -1;
       
-      headers.forEach((header, idx) => {
-        const text = header.textContent || '';
-        console.log(`Header ${idx}: ${text}`);
-        if (text.includes('Bruno Oliveira') && profName.includes('Bruno')) {
-          profIndex = 0; // Bruno é sempre a primeira coluna
-        } else if (text.includes('Miguel Oliveira') && profName.includes('Miguel')) {
-          profIndex = 1; // Miguel é a segunda
-        } else if (text.includes('Maicon Fraga') && profName.includes('Maicon')) {
-          profIndex = 2; // Maicon é a terceira
+      headerContainers.forEach((container, idx) => {
+        const headerText = container.textContent || '';
+        console.log(`Container ${idx}: ${headerText}`);
+        
+        if (headerText.includes('Bruno Oliveira') && profName.includes('Bruno')) {
+          profIndex = idx;
+        } else if (headerText.includes('Miguel Oliveira') && profName.includes('Miguel')) {
+          profIndex = idx;
+        } else if (headerText.includes('Maicon Fraga') && profName.includes('Maicon')) {
+          profIndex = idx;
         }
       });
       
-      console.log('Índice do profissional:', profIndex);
+      console.log('Índice identificado do profissional:', profIndex);
       
-      if (profIndex === -1) {
-        // Fallback: usar ordem fixa
-        if (profName.toLowerCase().includes('bruno')) profIndex = 0;
-        else if (profName.toLowerCase().includes('miguel')) profIndex = 1;
-        else if (profName.toLowerCase().includes('maicon')) profIndex = 2;
-      }
+      // Pegar TODAS as colunas de eventos (incluindo a que tem os horários)
+      const todasColunas = document.querySelectorAll('.rbc-time-content > div');
+      console.log('Total de divs em rbc-time-content:', todasColunas.length);
       
-      // Buscar todas as colunas de tempo (ignorar a coluna de horários à esquerda)
-      const colunas = document.querySelectorAll('.rbc-day-slot.rbc-time-column');
-      console.log('Total de colunas encontradas:', colunas.length);
-      
-      // A primeira coluna de tempo é a do primeiro profissional
-      const colunaProf = colunas[profIndex];
+      // A primeira div é a coluna de horários (.rbc-time-gutter)
+      // As próximas são as colunas dos profissionais
+      // Então Bruno = índice 1, Miguel = índice 2, Maicon = índice 3
+      const colunaProf = todasColunas[profIndex + 1]; // +1 porque a primeira é a coluna de horários
       
       if (!colunaProf) {
         return {
           success: false,
-          message: `Coluna ${profIndex} não encontrada. Total de colunas: ${colunas.length}`
+          message: `Coluna não encontrada para ${profName}`,
+          debug: {
+            profIndex: profIndex,
+            totalColunas: todasColunas.length
+          }
         };
       }
       
-      // Coletar eventos da coluna específica
+      // Buscar eventos dentro da coluna específica
       const eventos = colunaProf.querySelectorAll('.rbc-event');
-      console.log(`Eventos encontrados na coluna ${profIndex}:`, eventos.length);
+      console.log(`Eventos encontrados para ${profName}:`, eventos.length);
       
       const periodosOcupados = [];
       
-      eventos.forEach(evento => {
+      eventos.forEach((evento, idx) => {
         const titulo = evento.getAttribute('title') || '';
+        console.log(`Evento ${idx}: ${titulo}`);
+        
         const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
         
         if (horariosMatch) {
           const isIntervalo = evento.classList.contains('break');
-          const textoEvento = evento.textContent || '';
+          const isAgendamento = evento.classList.contains('eventWithNoPlan') || 
+                                evento.classList.contains('eventWithPlan');
           
           periodosOcupados.push({
             inicio: horariosMatch[1],
             fim: horariosMatch[2],
             tipo: isIntervalo ? 'intervalo' : 'agendamento',
-            descricao: textoEvento.substring(0, 50) // Limitar tamanho
+            cliente: titulo.split('-')[0].replace(/[\d:–\s]+/, '').trim()
           });
         }
       });
       
-      // Gerar todos os horários possíveis do dia
+      // Gerar horários do dia
       const todosHorarios = [];
       for(let h = 9; h < 20; h++) {
         todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
         todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
       }
       
-      // Função auxiliar
+      // Funções auxiliares
       const horarioParaMinutos = (horario) => {
         const [h, m] = horario.split(':').map(Number);
         return h * 60 + m;
       };
       
-      // Verificar disponibilidade
       const isHorarioOcupado = (horario) => {
         const minutosHorario = horarioParaMinutos(horario);
         
@@ -185,8 +186,9 @@ async function checkAvailability(page, professionalName, date) {
         totalLivres: horariosLivres.length,
         totalPeriodosOcupados: periodosOcupados.length,
         debug: {
-          colunaIndex: profIndex,
-          totalColunas: colunas.length,
+          profIndexIdentificado: profIndex,
+          colunaUsada: profIndex + 1,
+          totalColunas: todasColunas.length,
           totalEventos: eventos.length
         }
       };
