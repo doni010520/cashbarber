@@ -72,7 +72,6 @@ async function loginCashBarber(page) {
     return { success: false, error: error.message };
   }
 }
-
 // ========== VERIFICAR DISPONIBILIDADE ==========
 async function checkAvailability(page, professionalName, date) {
   try {
@@ -118,8 +117,6 @@ async function checkAvailability(page, professionalName, date) {
       }
       
       // Selecionar a coluna correta
-      // As colunas de tempo são: .rbc-day-slot.rbc-time-column
-      // Índice 0 = primeira coluna após a coluna de horários
       const colunas = document.querySelectorAll('.rbc-day-slot.rbc-time-column');
       console.log(`Total de colunas encontradas: ${colunas.length}`);
       
@@ -135,9 +132,22 @@ async function checkAvailability(page, professionalName, date) {
       // Buscar eventos dentro do container de eventos da coluna
       const containerEventos = colunaProf.querySelector('.rbc-events-container');
       if (!containerEventos) {
+        // Se não há container de eventos, significa que não há eventos
+        console.log('Nenhum evento encontrado - dia completamente livre');
+        const todosHorarios = [];
+        for(let h = 9; h < 20; h++) {
+          todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
+          todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
+        }
+        
         return {
-          success: false,
-          message: 'Container de eventos não encontrado'
+          success: true,
+          profissional: profName,
+          data: dataParam,
+          horariosLivres: todosHorarios,
+          periodosOcupados: [],
+          totalLivres: todosHorarios.length,
+          totalPeriodosOcupados: 0
         };
       }
       
@@ -154,23 +164,40 @@ async function checkAvailability(page, professionalName, date) {
         const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
         
         if (horariosMatch) {
+          // Verificar o tipo de evento pelas classes
           const isIntervalo = evento.classList.contains('break');
-          const textoTitulo = titulo.split(':').slice(2).join(':').trim();
+          const isAgendamento = evento.classList.contains('eventWithNoPlan') || 
+                               evento.classList.contains('eventWithPlan');
+          
+          // Extrair descrição do título (depois do segundo ":")
+          const partesTitulo = titulo.split(':');
+          let descricao = '';
+          if (partesTitulo.length >= 3) {
+            // Remove os dois primeiros elementos (horários) e junta o resto
+            descricao = partesTitulo.slice(2).join(':').trim();
+          }
           
           periodosOcupados.push({
             inicio: horariosMatch[1],
             fim: horariosMatch[2],
             tipo: isIntervalo ? 'intervalo' : 'agendamento',
-            descricao: textoTitulo || (isIntervalo ? 'Intervalo/Bloqueio' : 'Agendamento')
+            descricao: descricao || (isIntervalo ? 'Intervalo/Bloqueio' : 'Agendamento'),
+            classes: Array.from(evento.classList)
           });
         }
       });
+      
+      console.log('Períodos ocupados encontrados:', periodosOcupados);
       
       // Gerar todos os horários possíveis (09:00 às 20:00)
       const todosHorarios = [];
       for(let h = 9; h < 20; h++) {
         todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
+        todosHorarios.push(`${h.toString().padStart(2, '0')}:10`);
+        todosHorarios.push(`${h.toString().padStart(2, '0')}:20`);
         todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
+        todosHorarios.push(`${h.toString().padStart(2, '0')}:40`);
+        todosHorarios.push(`${h.toString().padStart(2, '0')}:50`);
       }
       
       // Função auxiliar para converter horário em minutos
@@ -193,14 +220,47 @@ async function checkAvailability(page, professionalName, date) {
       // Filtrar horários livres
       const horariosLivres = todosHorarios.filter(h => !isHorarioOcupado(h));
       
+      // Agrupar horários livres em períodos contínuos para melhor visualização
+      const periodosLivres = [];
+      let periodoAtual = null;
+      
+      for (let i = 0; i < horariosLivres.length; i++) {
+        const horario = horariosLivres[i];
+        const proximoHorario = horariosLivres[i + 1];
+        
+        if (!periodoAtual) {
+          periodoAtual = { inicio: horario, fim: horario };
+        }
+        
+        // Verificar se o próximo horário é contínuo (diferença de 10, 20 ou 30 minutos)
+        if (proximoHorario) {
+          const diffMinutos = horarioParaMinutos(proximoHorario) - horarioParaMinutos(horario);
+          if (diffMinutos <= 30) {
+            periodoAtual.fim = proximoHorario;
+          } else {
+            periodosLivres.push(periodoAtual);
+            periodoAtual = null;
+          }
+        } else {
+          // Último horário
+          periodosLivres.push(periodoAtual);
+        }
+      }
+      
       return {
         success: true,
         profissional: profName,
         data: dataParam,
         horariosLivres: horariosLivres,
+        periodosLivres: periodosLivres,
         periodosOcupados: periodosOcupados,
         totalLivres: horariosLivres.length,
-        totalPeriodosOcupados: periodosOcupados.length
+        totalPeriodosOcupados: periodosOcupados.length,
+        resumo: {
+          temDisponibilidade: horariosLivres.length > 0,
+          proximoHorarioLivre: horariosLivres[0] || null,
+          periodosLivresContinuos: periodosLivres
+        }
       };
     }, professionalName, date);
     
