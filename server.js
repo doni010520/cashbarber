@@ -78,15 +78,14 @@ async function checkAvailability(page, professionalName, date) {
   try {
     console.log(`Verificando disponibilidade para ${professionalName} em ${date}`);
     
-    // Navegar para agendamentos
     await page.goto(`${CONFIG.baseUrl}/agendamento`, {
       waitUntil: 'networkidle2'
     });
     
-    await delay(3000); // Aguardar calendário carregar
+    await delay(3000);
     
-    // Verificar horários no calendário
     const disponibilidade = await page.evaluate((profName) => {
+      // Mapear profissionais para índices de coluna
       const profissionaisOrdem = ['Bruno Oliveira', 'Miguel Oliveira', 'Maicon Fraga'];
       
       const profIndex = profissionaisOrdem.findIndex(p => 
@@ -102,50 +101,76 @@ async function checkAvailability(page, professionalName, date) {
         };
       }
       
-      // Buscar eventos do calendário
-      const eventos = document.querySelectorAll('.rbc-event');
-      const horariosOcupados = [];
+      // Buscar todas as colunas de tempo
+      const colunas = document.querySelectorAll('.rbc-day-slot.rbc-time-column');
+      const colunaProf = colunas[profIndex];
+      
+      if (!colunaProf) {
+        return {
+          success: false,
+          message: 'Coluna do profissional não encontrada'
+        };
+      }
+      
+      // Coletar eventos da coluna específica
+      const eventos = colunaProf.querySelectorAll('.rbc-event');
+      const periodosOcupados = [];
       
       eventos.forEach(evento => {
-        try {
-          const colunaEvento = evento.closest('.rbc-day-slot');
-          if (!colunaEvento) return;
+        const titulo = evento.getAttribute('title') || '';
+        // Regex para capturar horário início e fim
+        const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
+        
+        if (horariosMatch) {
+          const isIntervalo = evento.classList.contains('break');
+          const textoEvento = evento.textContent || '';
           
-          const todasColunas = document.querySelectorAll('.rbc-day-slot');
-          const indexColuna = Array.from(todasColunas).indexOf(colunaEvento);
-          
-          if (indexColuna === profIndex) {
-            const textoEvento = evento.textContent || '';
-            const horariosMatch = textoEvento.match(/\d{2}:\d{2}/g);
-            if (horariosMatch) {
-              horariosOcupados.push(...horariosMatch);
-            }
-          }
-        } catch (e) {
-          console.error('Erro ao processar evento:', e);
+          periodosOcupados.push({
+            inicio: horariosMatch[1],
+            fim: horariosMatch[2],
+            tipo: isIntervalo ? 'intervalo' : 'agendamento',
+            descricao: textoEvento
+          });
         }
       });
       
-      // Gerar todos os horários possíveis (14:00 às 20:00)
+      // Gerar todos os horários possíveis do dia (09:00 às 20:00)
       const todosHorarios = [];
-      for(let h = 14; h < 20; h++) {
+      for(let h = 9; h < 20; h++) {
         todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
         todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
       }
       
-      // Filtrar horários livres
-      const horariosLivres = todosHorarios.filter(h => 
-        !horariosOcupados.includes(h)
-      );
+      // Função para converter horário em minutos
+      const horarioParaMinutos = (horario) => {
+        const [h, m] = horario.split(':').map(Number);
+        return h * 60 + m;
+      };
+      
+      // Verificar se um horário está dentro de algum período ocupado
+      const isHorarioOcupado = (horario) => {
+        const minutosHorario = horarioParaMinutos(horario);
+        
+        return periodosOcupados.some(periodo => {
+          const minutosInicio = horarioParaMinutos(periodo.inicio);
+          const minutosFim = horarioParaMinutos(periodo.fim);
+          
+          // Horário está ocupado se está dentro do período
+          return minutosHorario >= minutosInicio && minutosHorario < minutosFim;
+        });
+      };
+      
+      // Filtrar apenas horários livres
+      const horariosLivres = todosHorarios.filter(h => !isHorarioOcupado(h));
       
       return {
         success: true,
         profissional: profissionaisOrdem[profIndex],
-        data: profName,
+        data: date,
         horariosLivres: horariosLivres,
-        horariosOcupados: horariosOcupados,
+        periodosOcupados: periodosOcupados,
         totalLivres: horariosLivres.length,
-        totalOcupados: horariosOcupados.length
+        totalPeriodosOcupados: periodosOcupados.length
       };
     }, professionalName);
     
