@@ -3,7 +3,6 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 
-// Aplica o Modo Stealth para evitar detecção de robô
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -11,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashbarber.com.br',
+    baseUrl: 'https://painel.cashberber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -20,7 +19,7 @@ const CONFIG = {
 };
 
 /**
- * Função principal que navega para o próximo dia e extrai o HTML
+ * Navega para o próximo dia na agenda e extrai o HTML.
  */
 async function getNextDayHTML() {
     let browser;
@@ -47,7 +46,7 @@ async function getNextDayHTML() {
         ]);
         console.log('Login bem-sucedido.');
 
-        // 2. Navegar para a página de agendamentos (vai carregar o dia de hoje)
+        // 2. Navegar para a página de agendamentos
         const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
         console.log(`Navegando para a página de agendamentos: ${agendaUrl}`);
         await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
@@ -56,20 +55,27 @@ async function getNextDayHTML() {
         const dataInicial = await page.$eval('.date-text', el => el.textContent.trim());
         console.log(`Página carregada com a data inicial: ${dataInicial}`);
 
-        // 3. Clicar no botão para avançar para o próximo dia
+        // 3. Clicar no botão para avançar
         console.log('Clicando na seta para avançar o dia...');
         const nextDayButtonSelector = '.arrow-buttons svg:last-child';
         await page.waitForSelector(nextDayButtonSelector, { visible: true });
         await page.click(nextDayButtonSelector);
 
-        // 4. Esperar a agenda recarregar após o clique
-        console.log('Aguardando a agenda do próximo dia carregar...');
-        await page.waitForNetworkIdle({ timeout: 10000 });
+        // 4. ESPERA INTELIGENTE: Aguarda o texto da data na tela mudar
+        console.log('Aguardando a atualização da data na tela...');
+        await page.waitForFunction(
+            (dataAnterior) => {
+                const dataAtual = document.querySelector('.date-text')?.textContent.trim();
+                return dataAtual && dataAtual !== dataAnterior;
+            },
+            { timeout: 20000 }, // Timeout aumentado para 20 segundos
+            dataInicial
+        );
 
         const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
-        console.log(`Nova data carregada: ${dataFinal}`);
+        console.log(`Nova data carregada com sucesso: ${dataFinal}`);
 
-        // 5. Extrair o HTML completo da página final
+        // 5. Extrair o HTML
         console.log('Extraindo o código HTML...');
         const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
         
@@ -87,7 +93,7 @@ async function getNextDayHTML() {
     }
 }
 
-// Endpoint da API para executar a ação
+// Endpoint da API
 app.post('/get-next-day-html', async (req, res) => {
     try {
         const result = await getNextDayHTML();
@@ -102,7 +108,7 @@ app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Serviço de Extração de HTML        ║
-║     (Avançar 1 dia)                    ║
+║     (v5.2 - Estável com Espera Inteligente) ║
 ║     Endpoint: POST /get-next-day-html  ║
 ╚════════════════════════════════════════╝
     `);
