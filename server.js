@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashbarber.com.br',
+    baseUrl: 'https://painel.cashberber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -19,12 +19,13 @@ const CONFIG = {
 };
 
 /**
- * Função principal que navega para o próximo dia e extrai o HTML
+ * Clica N vezes para avançar os dias e extrai o HTML final.
+ * @param {number} clicks - O número de vezes para clicar em 'próximo dia'.
  */
-async function getNextDayHTML() {
+async function getFutureDateHTML(clicks = 0) { // clicks tem 0 como padrão
     let browser;
     try {
-        console.log('Iniciando navegador em modo stealth...');
+        console.log(`Iniciando navegador para avançar ${clicks} dia(s)...`);
         browser = await puppeteer.launch({
             headless: 'new',
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -48,36 +49,33 @@ async function getNextDayHTML() {
 
         // 2. Navegar para a página de agendamentos
         const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
-        console.log(`Navegando para a página de agendamentos: ${agendaUrl}`);
         await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.rbc-time-view', { visible: true, timeout: 15000 });
-        
-        // Armazena o texto da data inicial
-        const dataInicial = await page.$eval('.date-text', el => el.textContent.trim());
-        console.log(`Página carregada com a data inicial: ${dataInicial}`);
+        console.log(`Página da agenda carregada no dia atual.`);
 
-        // 3. Clicar para avançar o dia
-        console.log('Clicando na seta para avançar o dia...');
-        const nextDayButtonSelector = '.arrow-buttons svg:last-child';
-        await page.waitForSelector(nextDayButtonSelector, { visible: true });
-        await page.click(nextDayButtonSelector);
+        // 3. Loop para clicar e avançar os dias
+        for (let i = 0; i < clicks; i++) {
+            const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
+            console.log(`Avançando do dia '${dataAntesDoClique}'... (Clique ${i + 1}/${clicks})`);
 
-        // 4. ESPERA INTELIGENTE: Aguarda a data na tela mudar
-        console.log('Aguardando a atualização da data na tela...');
-        await page.waitForFunction(
-            (dataAnterior) => {
-                const dataAtual = document.querySelector('.date-text')?.textContent.trim();
-                // Retorna true quando a data for diferente da anterior
-                return dataAtual && dataAtual !== dataAnterior;
-            },
-            { timeout: 15000 }, // Timeout de 15 segundos
-            dataInicial // Passa a data inicial como argumento para a função
-        );
+            const nextDayButtonSelector = '.arrow-buttons svg:last-child';
+            await page.click(nextDayButtonSelector);
+
+            // Espera inteligente: aguarda a data na tela mudar
+            await page.waitForFunction(
+                (dataAnterior) => {
+                    const dataAtual = document.querySelector('.date-text')?.textContent.trim();
+                    return dataAtual && dataAtual !== dataAnterior;
+                },
+                { timeout: 20000 },
+                dataAntesDoClique
+            );
+        }
 
         const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
-        console.log(`Nova data carregada com sucesso: ${dataFinal}`);
+        console.log(`Data final alcançada: ${dataFinal}`);
 
-        // 5. Extrair o HTML completo
+        // 4. Extrair o HTML final
         console.log('Extraindo o código HTML...');
         const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
         
@@ -88,17 +86,17 @@ async function getNextDayHTML() {
         console.error('ERRO DURANTE O PROCESSO:', error);
         throw error;
     } finally {
-        if (browser) {
-            await browser.close();
-            console.log('Navegador fechado.');
-        }
+        if (browser) await browser.close();
     }
 }
 
 // Endpoint da API
-app.post('/get-next-day-html', async (req, res) => {
+app.post('/get-future-day-html', async (req, res) => {
+    // Pega o número de cliques do corpo da requisição. Se não vier, usa 0.
+    const clicks = req.body.clicks || 0;
+
     try {
-        const result = await getNextDayHTML();
+        const result = await getFutureDateHTML(clicks);
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -110,8 +108,8 @@ app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Serviço de Extração de HTML        ║
-║     (v5.1 - Espera Inteligente)        ║
-║     Endpoint: POST /get-next-day-html  ║
+║     (v5.3 - Cliques Dinâmicos)         ║
+║     Endpoint: POST /get-future-day-html║
 ╚════════════════════════════════════════╝
     `);
 });
