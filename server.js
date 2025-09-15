@@ -84,41 +84,57 @@ async function checkAvailability(page, professionalName, date) {
     
     await delay(3000);
     
-    const disponibilidade = await page.evaluate((profName, dataParam) => { // Adicionar dataParam aqui
-      // Mapear profissionais para índices de coluna
-      const profissionaisOrdem = ['Bruno Oliveira', 'Miguel Oliveira', 'Maicon Fraga'];
+    const disponibilidade = await page.evaluate((profName, dataParam) => {
+      // Debug: verificar estrutura
+      console.log('Procurando por:', profName);
       
-      const profIndex = profissionaisOrdem.findIndex(p => 
-        p.toLowerCase().includes(profName.toLowerCase()) || 
-        profName.toLowerCase().includes(p.toLowerCase().split(' ')[0])
-      );
+      // Buscar headers com nomes dos profissionais
+      const headers = document.querySelectorAll('.rbc-header span');
+      let profIndex = -1;
+      
+      headers.forEach((header, idx) => {
+        const text = header.textContent || '';
+        console.log(`Header ${idx}: ${text}`);
+        if (text.includes('Bruno Oliveira') && profName.includes('Bruno')) {
+          profIndex = 0; // Bruno é sempre a primeira coluna
+        } else if (text.includes('Miguel Oliveira') && profName.includes('Miguel')) {
+          profIndex = 1; // Miguel é a segunda
+        } else if (text.includes('Maicon Fraga') && profName.includes('Maicon')) {
+          profIndex = 2; // Maicon é a terceira
+        }
+      });
+      
+      console.log('Índice do profissional:', profIndex);
       
       if (profIndex === -1) {
-        return { 
-          success: false, 
-          message: 'Profissional não encontrado',
-          profissionaisDisponiveis: profissionaisOrdem
-        };
+        // Fallback: usar ordem fixa
+        if (profName.toLowerCase().includes('bruno')) profIndex = 0;
+        else if (profName.toLowerCase().includes('miguel')) profIndex = 1;
+        else if (profName.toLowerCase().includes('maicon')) profIndex = 2;
       }
       
-      // Buscar todas as colunas de tempo
+      // Buscar todas as colunas de tempo (ignorar a coluna de horários à esquerda)
       const colunas = document.querySelectorAll('.rbc-day-slot.rbc-time-column');
+      console.log('Total de colunas encontradas:', colunas.length);
+      
+      // A primeira coluna de tempo é a do primeiro profissional
       const colunaProf = colunas[profIndex];
       
       if (!colunaProf) {
         return {
           success: false,
-          message: 'Coluna do profissional não encontrada'
+          message: `Coluna ${profIndex} não encontrada. Total de colunas: ${colunas.length}`
         };
       }
       
       // Coletar eventos da coluna específica
       const eventos = colunaProf.querySelectorAll('.rbc-event');
+      console.log(`Eventos encontrados na coluna ${profIndex}:`, eventos.length);
+      
       const periodosOcupados = [];
       
       eventos.forEach(evento => {
         const titulo = evento.getAttribute('title') || '';
-        // Regex para capturar horário início e fim
         const horariosMatch = titulo.match(/(\d{2}:\d{2})\s*–\s*(\d{2}:\d{2})/);
         
         if (horariosMatch) {
@@ -129,50 +145,52 @@ async function checkAvailability(page, professionalName, date) {
             inicio: horariosMatch[1],
             fim: horariosMatch[2],
             tipo: isIntervalo ? 'intervalo' : 'agendamento',
-            descricao: textoEvento
+            descricao: textoEvento.substring(0, 50) // Limitar tamanho
           });
         }
       });
       
-      // Gerar todos os horários possíveis do dia (09:00 às 20:00)
+      // Gerar todos os horários possíveis do dia
       const todosHorarios = [];
       for(let h = 9; h < 20; h++) {
         todosHorarios.push(`${h.toString().padStart(2, '0')}:00`);
         todosHorarios.push(`${h.toString().padStart(2, '0')}:30`);
       }
       
-      // Função para converter horário em minutos
+      // Função auxiliar
       const horarioParaMinutos = (horario) => {
         const [h, m] = horario.split(':').map(Number);
         return h * 60 + m;
       };
       
-      // Verificar se um horário está dentro de algum período ocupado
+      // Verificar disponibilidade
       const isHorarioOcupado = (horario) => {
         const minutosHorario = horarioParaMinutos(horario);
         
         return periodosOcupados.some(periodo => {
           const minutosInicio = horarioParaMinutos(periodo.inicio);
           const minutosFim = horarioParaMinutos(periodo.fim);
-          
-          // Horário está ocupado se está dentro do período
           return minutosHorario >= minutosInicio && minutosHorario < minutosFim;
         });
       };
       
-      // Filtrar apenas horários livres
       const horariosLivres = todosHorarios.filter(h => !isHorarioOcupado(h));
       
       return {
         success: true,
-        profissional: profissionaisOrdem[profIndex],
-        data: dataParam, // Usar dataParam em vez de date
+        profissional: profName,
+        data: dataParam,
         horariosLivres: horariosLivres,
         periodosOcupados: periodosOcupados,
         totalLivres: horariosLivres.length,
-        totalPeriodosOcupados: periodosOcupados.length
+        totalPeriodosOcupados: periodosOcupados.length,
+        debug: {
+          colunaIndex: profIndex,
+          totalColunas: colunas.length,
+          totalEventos: eventos.length
+        }
       };
-    }, professionalName, date); // Passar date como segundo argumento
+    }, professionalName, date);
     
     return disponibilidade;
     
