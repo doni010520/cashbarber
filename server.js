@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashberber.com.br',
+    baseUrl: 'https://painel.cashbarber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -22,7 +22,7 @@ const CONFIG = {
  * Clica N vezes para avançar os dias e extrai o HTML final.
  * @param {number} clicks - O número de vezes para clicar em 'próximo dia'.
  */
-async function getFutureDateHTML(clicks = 0) { // clicks tem 0 como padrão
+async function getFutureDateHTML(clicks = 0) {
     let browser;
     try {
         console.log(`Iniciando navegador para avançar ${clicks} dia(s)...`);
@@ -91,9 +91,9 @@ async function getFutureDateHTML(clicks = 0) { // clicks tem 0 como padrão
 }
 
 // Endpoint da API
-app.post('/get-future-day-html', async (req, res) => {
-    // Pega o número de cliques do corpo da requisição. Se não vier, usa 0.
-    const clicks = req.body.clicks || 0;
+app.post('/get-html-by-clicks', async (req, res) => {
+    // Pega o número de cliques do corpo da requisição. Se não vier, usa 0 (dia atual).
+    const clicks = req.body.clicks === undefined ? 0 : Number(req.body.clicks);
 
     try {
         const result = await getFutureDateHTML(clicks);
@@ -108,8 +108,8 @@ app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║     Serviço de Extração de HTML        ║
-║     (v5.3 - Cliques Dinâmicos)         ║
-║     Endpoint: POST /get-future-day-html║
+║     (v5.4 - Cliques Dinâmicos)         ║
+║     Endpoint: POST /get-html-by-clicks ║
 ╚════════════════════════════════════════╝
     `);
 });
