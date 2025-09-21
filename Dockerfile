@@ -1,35 +1,28 @@
-FROM node:18
+FROM ghcr.io/puppeteer/puppeteer:21.0.0
 
-# Instalar Chromium e dependências
-RUN apt-get update && apt-get install -y \
-    chromium \
-    fonts-liberation \
-    libappindicator3-1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libgbm1 \
-    libnss3 \
-    libxss1 \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+USER root
 
-# Configurar Puppeteer para usar o Chromium instalado
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
-# Diretório de trabalho
 WORKDIR /app
 
-# Copiar e instalar dependências
-COPY package.json .
-RUN npm install
+# Criar diretório para screenshots
+RUN mkdir -p /app/screenshots && chmod 777 /app/screenshots
 
-# Copiar código
+# Copiar arquivos
+COPY package*.json ./
+
+# Instalar dependências sem baixar Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+
+RUN npm ci --only=production && npm cache clean --force
+
 COPY server.js .
 
-# Porta
+# Permissões
+RUN chown -R pptruser:pptruser /app
+
+USER pptruser
+
 EXPOSE 3001
 
-# Comando para iniciar
 CMD ["node", "server.js"]
