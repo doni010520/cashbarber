@@ -31,15 +31,14 @@ async function startBrowserAndLogin() {
     const browser = await puppeteer.launch({
         headless: 'new',
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        // --- OTIMIZAÇÕES CRÍTICAS PARA SERVIDORES COM POUCA MEMÓRIA ---
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // Essencial para Docker/ambientes conteinerizados
+            '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Pode ajudar em ambientes com pouca RAM
+            '--single-process',
             '--disable-gpu'
         ]
     });
@@ -59,60 +58,7 @@ async function startBrowserAndLogin() {
 }
 
 /**
- * Extrai o HTML da agenda do dia ATUAL.
- */
-async function getTodayHTML() {
-    let browser;
-    try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
-
-        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
-        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-
-        const dataAtual = await page.$eval('.date-text', el => el.textContent.trim());
-        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-        return { success: true, date: dataAtual, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
-    }
-}
-
-/**
- * Clica N vezes para avançar e extrai o HTML do dia futuro.
- */
-async function getFutureDateHTML(clicks) {
-    let browser;
-    try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
-
-        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
-        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-        
-        for (let i = 0; i < clicks; i++) {
-            const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
-            await page.click('.arrow-buttons svg:last-child');
-            await page.waitForFunction(
-                (dataAnterior) => document.querySelector('.date-text')?.textContent.trim() !== dataAnterior,
-                { timeout: 20000 },
-                dataAntesDoClique
-            );
-        }
-
-        const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
-        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-        return { success: true, date: dataFinal, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
-    }
-}
-
-
-/**
- * Cria um agendamento no sistema.
+ * Cria um agendamento no sistema, com logs de depuração detalhados.
  */
 async function createAppointment(data) {
     let browser;
@@ -120,19 +66,19 @@ async function createAppointment(data) {
         const { page, browser: browserInstance } = await startBrowserAndLogin();
         browser = browserInstance;
 
+        console.log('[DEBUG] 1. A navegar para a página da agenda...');
         await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.buttons .btn-v2-blue');
         await page.click('.buttons .btn-v2-blue');
         
         await page.waitForSelector('#age_id_cliente', { visible: true });
-        console.log('Modal de agendamento carregado.');
+        console.log('[DEBUG] 2. Modal de agendamento carregado.');
         
-        // A lógica de preenchimento do formulário permanece a mesma
-        // ... (código de preenchimento omitido para brevidade, ele está correto)
+        console.log(`[DEBUG] 3. A procurar cliente: ${data.clientName}`);
         await page.type('#age_id_cliente', data.clientName, { delay: 100 });
         await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
         await page.click('.MuiAutocomplete-popper li');
-        console.log('Cliente selecionado.');
+        console.log('[DEBUG] 4. Cliente selecionado.');
         
         const [startHour, startMinute] = data.startTime.split(':').map(Number);
         const endDate = new Date(new Date().setHours(startHour, startMinute, 0) + (parseInt(data.totalDuration, 10) || 30) * 60000);
@@ -141,14 +87,17 @@ async function createAppointment(data) {
         await page.type('input[name="age_data"]', data.date);
         await page.type('input[name="age_inicio"]', data.startTime);
         await page.type('input[name="age_fim"]', endTime);
+        console.log(`[DEBUG] 5. Horários preenchidos: ${data.startTime} - ${endTime}`);
         
         const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
         const allSelects = await page.$$('.modal-body .select-v2 select');
         await allSelects[2].select(professionalId);
-        console.log('Profissional selecionado.');
+        console.log('[DEBUG] 6. Profissional selecionado.');
         
+        console.log('[DEBUG] 7. A aguardar 2.5 segundos para o carregamento dos serviços...');
         await new Promise(resolve => setTimeout(resolve, 2500));
 
+        console.log('[DEBUG] 8. A iniciar a adição de serviços...');
         const serviceInputSelector = '#id_usuario_servico';
         const addServiceButtonSelector = '.col-sm-1 .btn';
         const suggestionSelector = '.MuiAutocomplete-popper li';
@@ -156,23 +105,33 @@ async function createAppointment(data) {
 
         for (let i = 0; i < data.services.length; i++) {
             const serviceName = data.services[i];
+            console.log(`[DEBUG] 9a. A processar serviço: ${serviceName}`);
+            
+            await page.waitForSelector(serviceInputSelector, { visible: true });
             await page.click(serviceInputSelector, { clickCount: 3 });
             await page.keyboard.press('Backspace');
             await page.type(serviceInputSelector, serviceName, { delay: 150 });
+            console.log(`[DEBUG] 9b. A aguardar sugestões para "${serviceName}"...`);
+            
             await page.waitForSelector(suggestionSelector, { visible: true, timeout: 15000 });
+            console.log('[DEBUG] 9c. Sugestões encontradas. A clicar...');
             await page.click(suggestionSelector);
+            
             await page.click(addServiceButtonSelector);
+            console.log('[DEBUG] 9d. Botão "+" clicado.');
+            
             await page.waitForFunction(
                 (selector, count) => document.querySelectorAll(selector).length === count + 1,
                 { timeout: 10000 },
                 addedServicesTableSelector, i
             );
-            console.log(`Serviço "${serviceName}" adicionado.`);
+            console.log(`[DEBUG] 9e. Serviço "${serviceName}" confirmado na tabela.`);
         }
         
+        console.log('[DEBUG] 10. A clicar em "Salvar"...');
         await page.click('button[type="submit"]');
-        console.log('Botão "Salvar" clicado.');
 
+        console.log('[DEBUG] 11. A aguardar pop-up de confirmação...');
         await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
         const title = await page.$eval('.swal2-title', el => el.textContent).catch(() => '');
         if (title.toLowerCase().includes('sucesso') || title.toLowerCase().includes('agendado')) {
@@ -188,7 +147,8 @@ async function createAppointment(data) {
     }
 }
 
-// ENDPOINTS
+
+// ENDPOINTS (o resto do ficheiro permanece igual)
 app.post('/get-today-html', async (req, res) => {
     try { res.json(await getTodayHTML()); } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
@@ -210,7 +170,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Cash Barber v9.0 - Otimizado ║
+║    Serviço Cash Barber v9.1 - Debug    ║
 ╚════════════════════════════════════════╝
     `);
 });
