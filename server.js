@@ -3,7 +3,6 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 
-// Aplica o Modo Stealth para evitar a detecção de robôs
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -11,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashbarber.com.br',
+    baseUrl: 'https://painel.cashberber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -25,7 +24,7 @@ const CONFIG = {
 };
 
 /**
- * Função base para iniciar o navegador e fazer o login.
+ * Função base para iniciar o navegador e fazer login.
  */
 async function startBrowserAndLogin() {
     console.log('Iniciando navegador e fazendo login...');
@@ -50,8 +49,8 @@ async function startBrowserAndLogin() {
 }
 
 /**
- * Clica N vezes para avançar os dias e extrai o HTML final.
- * @param {number} clicks - O número de cliques para avançar.
+ * Clica N vezes para avançar e extrai o HTML do dia futuro.
+ * @param {number} clicks - O número de vezes para clicar.
  */
 async function getFutureDateHTML(clicks) {
     let browser;
@@ -59,10 +58,10 @@ async function getFutureDateHTML(clicks) {
         const { page, browser: browserInstance } = await startBrowserAndLogin();
         browser = browserInstance;
 
-        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
         await page.waitForSelector('.rbc-time-view', { visible: true });
-        console.log(`Página da agenda carregada no dia atual.`);
-
+        
         for (let i = 0; i < clicks; i++) {
             const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
             console.log(`Avançando do dia '${dataAntesDoClique}'... (Clique ${i + 1}/${clicks})`);
@@ -75,7 +74,6 @@ async function getFutureDateHTML(clicks) {
         }
 
         const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
-        console.log(`Data final alcançada: ${dataFinal}`);
         const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
         return { success: true, date: dataFinal, html: htmlContent };
     } finally {
@@ -84,20 +82,43 @@ async function getFutureDateHTML(clicks) {
 }
 
 /**
- * Cria um agendamento no sistema.
- * @param {object} data - Os dados do agendamento.
+ * Extrai o HTML da agenda do dia ATUAL.
  */
-async function createAppointment(data) {
+async function getTodayHTML() {
     let browser;
     try {
         const { page, browser: browserInstance } = await startBrowserAndLogin();
         browser = browserInstance;
 
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.rbc-time-view', { visible: true });
+
+        const dataAtual = await page.$eval('.date-text', el => el.textContent.trim());
+        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
+        return { success: true, date: dataAtual, html: htmlContent };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+/**
+ * Cria um agendamento no sistema.
+ * @param {object} data - Contém os dados do agendamento.
+ */
+async function createAppointment(data) {
+    let browser;
+    let page; // Declarar aqui para ser acessível no bloco catch
+    try {
+        const { page: loggedInPage, browser: browserInstance } = await startBrowserAndLogin();
+        page = loggedInPage;
+        browser = browserInstance;
+
         await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.buttons .btn-v2-blue');
+        await page.waitForSelector('.rbc-time-view', { visible: true });
         await page.click('.buttons .btn-v2-blue');
         
-        await page.waitForSelector('#age_id_cliente', { visible: true, timeout: 15000 });
+        await page.waitForSelector('#age_id_cliente', { visible: true });
         console.log('Modal de agendamento carregado.');
 
         console.log(`Buscando cliente: ${data.clientName}`);
@@ -105,87 +126,116 @@ async function createAppointment(data) {
         await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
         await page.evaluate((name) => {
             const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
-            const target = options.find(opt => opt.textContent.toLowerCase().includes(name.toLowerCase()));
-            if (target) target.click(); else throw new Error(`Cliente "${name}" não encontrado na lista.`);
+            const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
+            if (targetOption) targetOption.click();
         }, data.clientName);
         console.log('Cliente selecionado.');
-        
-        const [h, m] = data.startTime.split(':').map(Number);
-        const endDate = new Date(new Date().setHours(h, m, 0, 0) + (data.totalDuration * 60000));
+
+        const [startHour, startMinute] = data.startTime.split(':').map(Number);
+        const startDate = new Date();
+        startDate.setHours(startHour, startMinute, 0, 0);
+        const endDate = new Date(startDate.getTime() + (data.totalDuration || 30) * 60000);
         const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
         
         await page.type('input[name="age_data"]', data.date);
         await page.type('input[name="age_inicio"]', data.startTime);
         await page.type('input[name="age_fim"]', endTime);
         console.log(`Horários preenchidos: ${data.startTime} - ${endTime}`);
-
-        const profId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
-        if (!profId) throw new Error(`ID do profissional "${data.professionalName}" não configurado.`);
-        await page.evaluate((id) => {
-            document.querySelectorAll('.select-v2-label').forEach(label => {
-                if (label.textContent.includes('Profissional')) {
-                    const select = label.closest('.select-v2').querySelector('select');
-                    if (select) {
-                        select.value = id;
-                        select.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }
-            });
-        }, profId);
-        console.log('Profissional selecionado.');
         
-        for (const serviceName of data.services) {
-            console.log(`Adicionando serviço: ${serviceName}`);
-            const serviceInputSelector = '#id_usuario_servico';
+        const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
+        if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
+        
+        await page.waitForSelector('xpath/.//div[label[contains(., "Profissional")]]//select');
+        const professionalSelectHandle = await page.$('xpath/.//div[label[contains(., "Profissional")]]//select');
+        await professionalSelectHandle.select(professionalId);
+        console.log('Profissional selecionado.');
+
+        console.log('Iniciando adição de serviços...');
+        const serviceInputSelector = '#id_usuario_servico';
+        const addServiceButtonSelector = '.col-sm-1 .btn';
+        const suggestionSelector = '.MuiAutocomplete-popper li';
+        const addedServicesTableSelector = '.table-v2.with-total tbody tr';
+
+        for (let i = 0; i < data.services.length; i++) {
+            const serviceName = data.services[i];
+            const servicesAddedSoFar = i;
+
+            console.log(`Adicionando serviço ${i + 1}/${data.services.length}: ${serviceName}`);
             
-            // --- CORREÇÃO AQUI ---
-            // Limpa o campo antes de digitar o próximo serviço
+            await page.waitForSelector(serviceInputSelector, { visible: true });
+            
+            // Limpeza e digitação mais humanas
+            await page.click(serviceInputSelector);
+            await page.waitForTimeout(200);
             await page.click(serviceInputSelector, { clickCount: 3 });
             await page.keyboard.press('Backspace');
-            // --------------------
+            await page.type(serviceInputSelector, serviceName, { delay: 150 });
 
-            await page.type(serviceInputSelector, serviceName, { delay: 100 });
-            await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
-            await page.evaluate((name) => {
-                const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
-                const target = options.find(opt => opt.textContent.toLowerCase().includes(name.toLowerCase()));
-                if (target) target.click(); else throw new Error(`Serviço "${name}" não encontrado na lista.`);
-            }, serviceName);
-            await page.click('.col-sm-1 .btn');
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Tenta encontrar a sugestão, se falhar, tira um screenshot
+            try {
+                await page.waitForSelector(suggestionSelector, { visible: true, timeout: 10000 });
+            } catch (e) {
+                console.error(`Lista de sugestões para "${serviceName}" não apareceu.`);
+                await page.screenshot({ path: 'debug_servico_falhou.png' });
+                console.log('Screenshot de depuração salvo como "debug_servico_falhou.png"');
+                throw new Error(`A lista de sugestões para o serviço "${serviceName}" não apareceu.`);
+            }
+            
+            const clicked = await page.evaluate((name, selector) => {
+                const options = Array.from(document.querySelectorAll(selector));
+                const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
+                if (targetOption) {
+                    targetOption.click();
+                    return true;
+                }
+                return false;
+            }, serviceName, suggestionSelector);
+
+            if (!clicked) throw new Error(`Sugestão para o serviço "${serviceName}" não foi encontrada.`);
+
+            await page.click(addServiceButtonSelector);
+            
+            await page.waitForFunction(
+                (selector, count) => document.querySelectorAll(selector).length === count + 1,
+                { timeout: 10000 },
+                addedServicesTableSelector,
+                servicesAddedSoFar
+            );
+            console.log(`Serviço "${serviceName}" adicionado com sucesso.`);
         }
-        console.log('Serviços adicionados.');
+        console.log('Todos os serviços foram adicionados.');
         
         await page.click('button[type="submit"]');
-        console.log('Clicou em "Salvar agendamento".');
+        console.log('Botão "Salvar agendamento" clicado.');
 
-        console.log('Aguardando confirmação do site...');
-        await page.waitForFunction(() => {
-            const modalGone = !document.querySelector('.modal-dialog');
-            const popupVisible = document.querySelector('.swal2-popup');
-            return modalGone || popupVisible;
-        }, { timeout: 15000 });
+        await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
+        console.log('Popup de confirmação/erro apareceu.');
 
-        const errorPopup = await page.$('.swal2-error');
-        if (errorPopup) {
-            const errorMessage = await page.$eval('.swal2-content', el => el.textContent);
-            throw new Error(`O site retornou um erro: ${errorMessage}`);
+        const title = await page.$eval('.swal2-title', (el) => el.textContent).catch(() => '');
+        const message = await page.$eval('.swal2-html-container', (el) => el.textContent).catch(() => '');
+
+        if (title.toLowerCase().includes('sucesso') || title.toLowerCase().includes('agendado')) {
+            console.log('Mensagem de sucesso encontrada!');
+            return { success: true, message: 'Agendamento criado com sucesso!', data: data };
+        } else {
+            throw new Error(`O site retornou um erro: ${title} - ${message}`);
         }
-
-        console.log('Agendamento criado com sucesso!');
-        return { success: true, message: 'Agendamento criado com sucesso!', data };
+    } catch (error) {
+        console.error('ERRO AO CRIAR AGENDAMENTO:', error);
+        if (page && !page.isClosed()) {
+            await page.screenshot({ path: 'erro_final.png' });
+            console.log('Screenshot do erro final salvo.');
+        }
+        throw error;
     } finally {
         if (browser) await browser.close();
     }
 }
 
-// ==================
-// === ENDPOINTS ====
-// ==================
-
+// ENDPOINTS DA API
 app.post('/get-today-html', async (req, res) => {
     try {
-        const result = await getFutureDateHTML(0);
+        const result = await getTodayHTML();
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -194,8 +244,8 @@ app.post('/get-today-html', async (req, res) => {
 
 app.post('/get-future-day-html', async (req, res) => {
     const clicks = req.body.clicks;
-    if (clicks === undefined || clicks < 1) {
-        return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 1 ou mais.' });
+    if (clicks === undefined || clicks < 0) { // Aceita 0 cliques
+        return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 0 ou mais.' });
     }
     try {
         const result = await getFutureDateHTML(Number(clicks));
@@ -206,8 +256,12 @@ app.post('/get-future-day-html', async (req, res) => {
 });
 
 app.post('/create-appointment', async (req, res) => {
+    const appointmentData = req.body;
+    if (!appointmentData.clientName || !appointmentData.professionalName || !appointmentData.date || !appointmentData.startTime || !appointmentData.services) {
+        return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes.' });
+    }
     try {
-        const result = await createAppointment(req.body);
+        const result = await createAppointment(appointmentData);
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -218,10 +272,9 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Completo Cash Barber (v7.3)   ║
-║    - /get-today-html                   ║
-║    - /get-future-day-html              ║
-║    - /create-appointment               ║
+║    Serviço Cash Barber v7.4 - Completo ║
+║    - Buscar Horários (Hoje/Futuro)     ║
+║    - Criar Agendamentos (Depuração)    ║
 ╚════════════════════════════════════════╝
     `);
 });
