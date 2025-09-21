@@ -16,81 +16,58 @@ const CONFIG = {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
     },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-    professionalIds: {
-        'bruno oliveira': '73',
-        'miguel oliveira': '74',
-        'maicon fraga': '18522'
-    }
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
 };
 
 /**
- * Função base para iniciar o navegador e fazer o login.
- * Retorna a instância do browser e da página.
+ * Clica N vezes para avançar os dias e extrai o HTML final.
+ * @param {number} clicks - O número de vezes para clicar em 'próximo dia'.
  */
-async function startBrowserAndLogin() {
-    console.log('Iniciando navegador e fazendo login...');
-    const browser = await puppeteer.launch({
-        headless: 'new',
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-    });
-    const page = await browser.newPage();
-    await page.setUserAgent(CONFIG.userAgent);
-
-    await page.goto(CONFIG.baseUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.waitForSelector('form.kt-form', { visible: true });
-    await page.type('input[name="email"]', CONFIG.credentials.email);
-    await page.type('input[name="password"]', CONFIG.credentials.password);
-    await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2' }),
-        page.click('#kt_login_signin_submit')
-    ]);
-    console.log('Login bem-sucedido.');
-    return { browser, page };
-}
-
-/**
- * Função para extrair o HTML da agenda de hoje.
- */
-async function getTodayHTML() {
+async function getFutureDateHTML(clicks = 0) {
     let browser;
     try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
+        console.log(`Iniciando navegador para avançar ${clicks} dia(s)...`);
+        browser = await puppeteer.launch({
+            headless: 'new',
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+        });
 
-        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
+        const page = await browser.newPage();
+        await page.setUserAgent(CONFIG.userAgent);
 
-        const dataAtual = await page.$eval('.date-text', el => el.textContent.trim());
-        console.log(`Página carregada com a data de hoje: ${dataAtual}`);
-        
-        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-        return { success: true, date: dataAtual, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
-    }
-}
+        // 1. Login
+        console.log('Realizando login...');
+        await page.goto(CONFIG.baseUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForSelector('form.kt-form', { visible: true, timeout: 15000 });
+        await page.type('input[name="email"]', CONFIG.credentials.email);
+        await page.type('input[name="password"]', CONFIG.credentials.password);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            page.click('#kt_login_signin_submit')
+        ]);
+        console.log('Login bem-sucedido.');
 
-/**
- * Clica N vezes para avançar e extrai o HTML do dia futuro.
- * @param {number} clicks - O número de cliques para avançar.
- */
-async function getFutureDayHTML(clicks) {
-    let browser;
-    try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
+        // 2. Navegar para a página de agendamentos
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.rbc-time-view', { visible: true, timeout: 15000 });
+        console.log(`Página da agenda carregada no dia atual.`);
 
-        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-
+        // 3. Loop para clicar e avançar os dias
         for (let i = 0; i < clicks; i++) {
             const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
             console.log(`Avançando do dia '${dataAntesDoClique}'... (Clique ${i + 1}/${clicks})`);
-            await page.click('.arrow-buttons svg:last-child');
+
+            const nextDayButtonSelector = '.arrow-buttons svg:last-child';
+            await page.click(nextDayButtonSelector);
+
+            // Espera inteligente: aguarda a data na tela mudar
             await page.waitForFunction(
-                (dataAnterior) => document.querySelector('.date-text')?.textContent.trim() !== dataAnterior,
+                (dataAnterior) => {
+                    const dataAtual = document.querySelector('.date-text')?.textContent.trim();
+                    return dataAtual && dataAtual !== dataAnterior;
+                },
                 { timeout: 20000 },
                 dataAntesDoClique
             );
@@ -98,129 +75,42 @@ async function getFutureDayHTML(clicks) {
 
         const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
         console.log(`Data final alcançada: ${dataFinal}`);
+
+        // 4. Extrair o HTML final
+        console.log('Extraindo o código HTML...');
         const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
+        
+        console.log('HTML extraído com sucesso.');
         return { success: true, date: dataFinal, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
-    }
-}
 
-/**
- * Cria um agendamento no sistema.
- * @param {object} data - Os dados do agendamento.
- */
-async function createAppointment(data) {
-    let browser;
-    try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
-
-        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.buttons .btn-v2-blue');
-        await page.click('.buttons .btn-v2-blue');
-        
-        await page.waitForSelector('#age_id_cliente', { visible: true, timeout: 15000 });
-        console.log('Modal de agendamento carregado.');
-
-        console.log(`Buscando cliente: ${data.clientName}`);
-        await page.type('#age_id_cliente', data.clientName, { delay: 100 });
-        await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
-        await page.evaluate((name) => {
-            const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
-            const target = options.find(opt => opt.textContent.toLowerCase().includes(name.toLowerCase()));
-            if (target) target.click(); else throw new Error(`Cliente "${name}" não encontrado na lista.`);
-        }, data.clientName);
-        console.log('Cliente selecionado.');
-        
-        const [h, m] = data.startTime.split(':').map(Number);
-        const endDate = new Date(new Date().setHours(h, m, 0, 0) + (data.totalDuration * 60000));
-        const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        
-        await page.type('input[name="age_data"]', data.date);
-        await page.type('input[name="age_inicio"]', data.startTime);
-        await page.type('input[name="age_fim"]', endTime);
-        console.log(`Horários preenchidos: ${data.startTime} - ${endTime}`);
-
-        const profId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
-        if (!profId) throw new Error(`ID do profissional "${data.professionalName}" não configurado.`);
-        await page.evaluate((id) => {
-            document.querySelectorAll('.select-v2-label').forEach(label => {
-                if (label.textContent.includes('Profissional')) {
-                    const select = label.closest('.select-v2').querySelector('select');
-                    if (select) {
-                        select.value = id;
-                        select.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }
-            });
-        }, profId);
-        console.log('Profissional selecionado.');
-        
-        for (const serviceName of data.services) {
-            console.log(`Adicionando serviço: ${serviceName}`);
-            await page.type('#id_usuario_servico', serviceName, { delay: 100 });
-            await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
-            await page.evaluate((name) => {
-                const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
-                const target = options.find(opt => opt.textContent.toLowerCase().includes(name.toLowerCase()));
-                if (target) target.click(); else throw new Error(`Serviço "${name}" não encontrado na lista.`);
-            }, serviceName);
-            await page.click('.col-sm-1 .btn');
-            await page.waitForTimeout(500);
-        }
-        console.log('Serviços adicionados.');
-        
-        await page.click('button[type="submit"]');
-        await page.waitForSelector('.modal-dialog', { hidden: true, timeout: 15000 });
-        console.log('Agendamento criado com sucesso!');
-
-        return { success: true, message: 'Agendamento criado com sucesso!', data };
     } catch (error) {
+        console.error('ERRO DURANTE O PROCESSO:', error);
         throw error;
     } finally {
         if (browser) await browser.close();
     }
 }
 
-// ==================
-// === ENDPOINTS ====
-// ==================
-
-app.post('/get-today-html', async (req, res) => {
-    try {
-        const result = await getTodayHTML();
-        res.json(result);
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.post('/get-future-day-html', async (req, res) => {
+// Endpoint da API
+app.post('/get-html-by-clicks', async (req, res) => {
+    // Pega o número de cliques do corpo da requisição. Se não vier, usa 0 (dia atual).
     const clicks = req.body.clicks === undefined ? 0 : Number(req.body.clicks);
+
     try {
-        const result = await getFutureDayHTML(clicks);
+        const result = await getFutureDateHTML(clicks);
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
-app.post('/create-appointment', async (req, res) => {
-    try {
-        const result = await createAppointment(req.body);
-        res.json(result);
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço de Automação Cash Barber    ║
-║             (v6.3 - Completo)          ║
+║     Serviço de Extração de HTML        ║
+║     (v5.4 - Cliques Dinâmicos)         ║
+║     Endpoint: POST /get-html-by-clicks ║
 ╚════════════════════════════════════════╝
     `);
 });
