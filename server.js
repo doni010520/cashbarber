@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashberber.com.br',
+    baseUrl: 'https://painel.cashbarber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -192,4 +192,5 @@ app.listen(PORT, () => {
 ╚════════════════════════════════════════╝
     `);
 });
+
 
