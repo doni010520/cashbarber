@@ -2,158 +2,225 @@ const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
-const axios = require('axios');
 
+// Aplica o Modo Stealth para tornar o Puppeteer indetetável
 puppeteer.use(StealthPlugin());
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    apiUrl: 'https://api.cashberber.com.br/api/painel',
-    loginUrl: 'https://painel.cashbarber.com.br',
+    baseUrl: 'https://painel.cashbarber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
     },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+    professionalIds: {
+        'bruno oliveira': '73',
+        'miguel oliveira': '74',
+        'maicon fraga': '18522'
+    }
 };
 
-let authTokenCache = { token: null, expires: 0 };
+/**
+ * Função base para iniciar o navegador e fazer login (método estável).
+ */
+async function startBrowserAndLogin() {
+    console.log('Iniciando navegador e fazendo login...');
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    });
+    const page = await browser.newPage();
+    await page.setUserAgent(CONFIG.userAgent);
+
+    await page.goto(CONFIG.baseUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.waitForSelector('form.kt-form', { visible: true });
+    await page.type('input[name="email"]', CONFIG.credentials.email);
+    await page.type('input[name="password"]', CONFIG.credentials.password);
+    
+    // Lógica de login simples e fiável
+    await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+        page.click('#kt_login_signin_submit')
+    ]);
+    
+    if (page.url().includes('/login')) {
+        throw new Error('O login falhou. Verifique as credenciais ou se há um CAPTCHA.');
+    }
+    console.log('Login bem-sucedido.');
+    return { browser, page };
+}
 
 /**
- * Usa o Puppeteer para fazer login e capturar o Token.
- * Inclui logs de diagnóstico e screenshot em caso de falha.
+ * Extrai o HTML da agenda do dia ATUAL.
  */
-async function getAuthToken() {
-    if (authTokenCache.token && authTokenCache.expires > Date.now()) {
-        console.log('A usar o token de autenticação em cache.');
-        return authTokenCache.token;
-    }
-    
-    console.log('A iniciar o navegador para capturar um novo token...');
+async function getTodayHTML() {
     let browser;
-    let page;
     try {
-        browser = await puppeteer.launch({
-            headless: 'new',
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        page = await browser.newPage();
-        
-        let token = null;
-        let loginApiUrlFound = false;
+        const { page, browser: browserInstance } = await startBrowserAndLogin();
+        browser = browserInstance;
 
-        // Listener de diagnóstico: "ouve" todas as respostas da rede
-        page.on('response', async (response) => {
-            const url = response.url();
-            // Verifica se é uma resposta de API (JSON)
-            if (url.includes('/api/')) {
-                console.log(`[LOG DE REDE] Resposta de API recebida de: ${url}`);
-                if (url.includes('/auth/login') && response.ok()) {
-                    loginApiUrlFound = true;
-                    const jsonResponse = await response.json();
-                    if (jsonResponse.access_token) {
-                        token = jsonResponse.access_token;
-                    } else {
-                         console.warn('[LOG DE REDE] Resposta de login encontrada, mas sem "access_token".');
-                    }
-                }
-            }
-        });
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.rbc-time-view', { visible: true });
 
-        await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('form.kt-form');
-        await page.type('input[name="email"]', CONFIG.credentials.email);
-        await page.type('input[name="password"]', CONFIG.credentials.password);
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-            page.click('#kt_login_signin_submit')
-        ]);
-        
-        // Aguarda a captura do token
-        await new Promise((resolve, reject) => {
-            let attempts = 0;
-            const interval = setInterval(() => {
-                if (token) {
-                    clearInterval(interval);
-                    resolve();
-                } else if (attempts > 30) { // Timeout de 15 segundos
-                    clearInterval(interval);
-                    if (!loginApiUrlFound) {
-                        reject(new Error('A chamada à API de login não foi detetada. Verifique os logs de rede.'));
-                    } else {
-                        reject(new Error('Não foi possível capturar o token após o login. Verifique o screenshot "login_falhou.png".'));
-                    }
-                }
-                attempts++;
-            }, 500);
-        });
-
-        authTokenCache = { token, expires: Date.now() + 50 * 60 * 1000 };
-        console.log('Novo token capturado e guardado em cache.');
-        return token;
-
-    } catch (error) {
-        // Se a promessa for rejeitada, tira um screenshot antes de falhar
-        console.error('ERRO NA CAPTURA DO TOKEN. A tirar screenshot de diagnóstico...');
-        if (page) {
-            await page.screenshot({ path: 'login_falhou.png', fullPage: true });
-            console.log('Screenshot "login_falhou.png" salvo. Por favor, verifique a imagem para ver se há mensagens de erro na tela.');
-        }
-        throw error; // Re-lança o erro original
+        const dataAtual = await page.$eval('.date-text', el => el.textContent.trim());
+        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
+        return { success: true, date: dataAtual, html: htmlContent };
     } finally {
         if (browser) await browser.close();
     }
 }
 
-// ENDPOINTS (sem alterações)
-app.post('/find-client', async (req, res) => {
+/**
+ * Clica N vezes para avançar e extrai o HTML do dia futuro.
+ */
+async function getFutureDateHTML(clicks) {
+    let browser;
     try {
-        const { clientName } = req.body;
-        const token = await getAuthToken();
-        const response = await axios.post(`${CONFIG.apiUrl}/clientes/simpleList`, { termo: clientName }, { headers: { 'Authorization': `Bearer ${token}` } });
-        res.json({ success: true, client: response.data[0] });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
+        const { page, browser: browserInstance } = await startBrowserAndLogin();
+        browser = browserInstance;
 
-app.post('/find-services', async (req, res) => {
-    try {
-        const { professionalId, serviceNames } = req.body;
-        const token = await getAuthToken();
-        const response = await axios.post(`${CONFIG.apiUrl}/usuarios/servicos/${professionalId}`, {}, { headers: { 'Authorization': `Bearer ${token}` } });
-        const allServices = response.data;
-        const foundServices = serviceNames.map(name => allServices.find(s => s.ser_nome.toLowerCase() === name.toLowerCase())).filter(Boolean).map(s => ({ id: s.id, name: s.ser_nome }));
-        res.json({ success: true, services: foundServices });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
+        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
+        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.rbc-time-view', { visible: true });
+        
+        for (let i = 0; i < clicks; i++) {
+            const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
+            await page.click('.arrow-buttons svg:last-child');
+            await page.waitForFunction(
+                (dataAnterior) => document.querySelector('.date-text')?.textContent.trim() !== dataAnterior,
+                { timeout: 20000 },
+                dataAntesDoClique
+            );
+        }
 
-app.post('/create-appointment-api', async (req, res) => {
+        const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
+        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
+        return { success: true, date: dataFinal, html: htmlContent };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+
+/**
+ * Cria um agendamento no sistema via scraping.
+ */
+async function createAppointment(data) {
+    let browser;
+    let page;
     try {
-        const { clientId, professionalId, serviceIds, date, startTime, totalDuration, filialId = 22 } = req.body;
-        const token = await getAuthToken();
-        const [startHour, startMinute] = startTime.split(':').map(Number);
-        const startDate = new Date(`${date}T${startTime}:00`);
-        const endDate = new Date(startDate.getTime() + totalDuration * 60000);
+        const { page: loggedInPage, browser: browserInstance } = await startBrowserAndLogin();
+        page = loggedInPage;
+        browser = browserInstance;
+
+        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('.rbc-time-view', { visible: true });
+        await page.click('.buttons .btn-v2-blue');
+        
+        await page.waitForSelector('#age_id_cliente', { visible: true });
+        console.log('Modal de agendamento carregado.');
+
+        // Preenche o formulário...
+        console.log(`Buscando cliente: ${data.clientName}`);
+        await page.type('#age_id_cliente', data.clientName, { delay: 100 });
+        await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
+        await page.click('.MuiAutocomplete-popper li');
+        console.log('Cliente selecionado.');
+        
+        const [startHour, startMinute] = data.startTime.split(':').map(Number);
+        const endDate = new Date(new Date().setHours(startHour, startMinute, 0) + (parseInt(data.totalDuration, 10) || 30) * 60000);
         const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        const payload = {
-            age_id_cliente: clientId,
-            age_id_user: professionalId,
-            age_inicio: `${date} ${startTime}`,
-            age_fim: `${date} ${endTime}`,
-            age_id_filial: filialId,
-            age_tipo: 'Agendamento',
-            servicos: serviceIds
-        };
-        const response = await axios.post(`${CONFIG.apiUrl}/agendamentos`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
-        res.json({ success: true, message: 'Agendamento criado com sucesso via API!', data: response.data });
+        
+        await page.type('input[name="age_data"]', data.date);
+        await page.type('input[name="age_inicio"]', data.startTime);
+        await page.type('input[name="age_fim"]', endTime);
+        console.log(`Horários preenchidos: ${data.startTime} - ${endTime}`);
+        
+        const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
+        if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
+        
+        const professionalSelectXPath = "//div[contains(@class, 'select-v2')][.//div[contains(., 'Profissional')]]//select";
+        await page.waitForXPath(professionalSelectXPath, { visible: true });
+        const professionalSelectHandles = await page.$x(professionalSelectXPath);
+        await professionalSelectHandles[0].select(professionalId);
+        console.log('Profissional selecionado.');
+
+        const serviceInputSelector = '#id_usuario_servico';
+        const addServiceButtonSelector = '.col-sm-1 .btn';
+        const suggestionSelector = '.MuiAutocomplete-popper li';
+        const addedServicesTableSelector = '.table-v2.with-total tbody tr';
+
+        for (let i = 0; i < data.services.length; i++) {
+            const serviceName = data.services[i];
+            await page.click(serviceInputSelector, { clickCount: 3 });
+            await page.keyboard.press('Backspace');
+            await page.type(serviceInputSelector, serviceName, { delay: 150 });
+            await page.waitForSelector(suggestionSelector, { visible: true });
+            await page.click(suggestionSelector);
+            await page.click(addServiceButtonSelector);
+            await page.waitForFunction(
+                (selector, count) => document.querySelectorAll(selector).length === count + 1,
+                { timeout: 10000 },
+                addedServicesTableSelector, i
+            );
+            console.log(`Serviço "${serviceName}" adicionado.`);
+        }
+        
+        await page.click('button[type="submit"]');
+        console.log('Botão \"Salvar\" clicado.');
+
+        await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
+        const title = await page.$eval('.swal2-title', el => el.textContent).catch(() => '');
+        if (title.toLowerCase().includes('sucesso') || title.toLowerCase().includes('agendado')) {
+            return { success: true, message: 'Agendamento criado com sucesso!' };
+        } else {
+            const message = await page.$eval('.swal2-html-container', el => el.textContent).catch(() => '');
+            throw new Error(`O site retornou um erro: ${title} - ${message}`);
+        }
+
     } catch (error) {
-        const errorMessage = error.response?.data?.errors?.[0] || error.message;
-        res.status(500).json({ success: false, error: `Falha ao criar agendamento: ${errorMessage}` });
+        if (page && !page.isClosed()) {
+            await page.screenshot({ path: 'erro_agendamento.png' });
+            console.log('Screenshot de erro salvo como "erro_agendamento.png"');
+        }
+        throw error;
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// ENDPOINTS
+app.post('/get-today-html', async (req, res) => {
+    try {
+        res.json(await getTodayHTML());
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/get-future-day-html', async (req, res) => {
+    try {
+        const clicks = req.body.clicks;
+        if (clicks === undefined || clicks < 1) {
+            return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 1 ou mais.' });
+        }
+        res.json(await getFutureDateHTML(Number(clicks)));
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/create-appointment', async (req, res) => {
+    try {
+        res.json(await createAppointment(req.body));
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -161,7 +228,9 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço de API Cash Barber (vFINAL-DIAG) ║
+║    Serviço Cash Barber v8.0 - Final    ║
+║    - Buscar Horários (Hoje/Futuro)     ║
+║    - Criar Agendamentos (Scraping)     ║
 ╚════════════════════════════════════════╝
     `);
 });
