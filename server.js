@@ -136,7 +136,15 @@ async function createAppointment(data) {
         
         for (const serviceName of data.services) {
             console.log(`Adicionando serviço: ${serviceName}`);
-            await page.type('#id_usuario_servico', serviceName, { delay: 100 });
+            const serviceInputSelector = '#id_usuario_servico';
+            
+            // --- CORREÇÃO AQUI ---
+            // Limpa o campo antes de digitar o próximo serviço
+            await page.click(serviceInputSelector, { clickCount: 3 });
+            await page.keyboard.press('Backspace');
+            // --------------------
+
+            await page.type(serviceInputSelector, serviceName, { delay: 100 });
             await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
             await page.evaluate((name) => {
                 const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
@@ -144,23 +152,20 @@ async function createAppointment(data) {
                 if (target) target.click(); else throw new Error(`Serviço "${name}" não encontrado na lista.`);
             }, serviceName);
             await page.click('.col-sm-1 .btn');
-            await new Promise(resolve => setTimeout(resolve, 500)); // Pausa para a UI atualizar
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
         console.log('Serviços adicionados.');
         
         await page.click('button[type="submit"]');
         console.log('Clicou em "Salvar agendamento".');
 
-        // --- CORREÇÃO AQUI ---
-        // Espera inteligente pela confirmação (ou erro)
         console.log('Aguardando confirmação do site...');
         await page.waitForFunction(() => {
-            const modalGone = !document.querySelector('.modal-dialog'); // Se o modal sumir
-            const popupVisible = document.querySelector('.swal2-popup'); // Ou se um popup aparecer
+            const modalGone = !document.querySelector('.modal-dialog');
+            const popupVisible = document.querySelector('.swal2-popup');
             return modalGone || popupVisible;
         }, { timeout: 15000 });
 
-        // Verifica se o popup que apareceu é de erro
         const errorPopup = await page.$('.swal2-error');
         if (errorPopup) {
             const errorMessage = await page.$eval('.swal2-content', el => el.textContent);
@@ -213,7 +218,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Completo Cash Barber (v7.2)   ║
+║    Serviço Completo Cash Barber (v7.3)   ║
 ║    - /get-today-html                   ║
 ║    - /get-future-day-html              ║
 ║    - /create-appointment               ║
