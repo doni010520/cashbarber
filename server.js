@@ -2,7 +2,9 @@ const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
+const axios = require('axios');
 
+// Aplica o Modo Stealth para tornar o Puppeteer indetetável
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -10,245 +12,180 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashbarber.com.br',
+    // A URL base para as chamadas de API que descobrimos
+    apiUrl: 'https://api.cashberber.com.br/api/painel',
+    // A URL da página de login
+    loginUrl: 'https://painel.cashbarber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
     },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-    professionalIds: {
-        'bruno oliveira': '73',
-        'miguel oliveira': '74',
-        'maicon fraga': '18522'
-    }
 };
 
-/**
- * Função base para iniciar o navegador e fazer login.
- */
-async function startBrowserAndLogin() {
-    console.log('Iniciando navegador e fazendo login...');
-    const browser = await puppeteer.launch({
-        headless: 'new',
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-    });
-    const page = await browser.newPage();
-    await page.setUserAgent(CONFIG.userAgent);
-
-    await page.goto(CONFIG.baseUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.waitForSelector('form.kt-form', { visible: true });
-    await page.type('input[name="email"]', CONFIG.credentials.email);
-    await page.type('input[name="password"]', CONFIG.credentials.password);
-    await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2' }),
-        page.click('#kt_login_signin_submit')
-    ]);
-    console.log('Login bem-sucedido.');
-    return { browser, page };
-}
+// Um cache simples para guardar o token e evitar logins repetidos a cada chamada
+let authTokenCache = { token: null, expires: 0 };
 
 /**
- * Clica N vezes para avançar e extrai o HTML do dia futuro.
+ * Usa o Puppeteer apenas uma vez para fazer login e capturar o Token de Autenticação.
+ * Reutiliza o token se ainda for válido para otimizar o processo.
  */
-async function getFutureDateHTML(clicks) {
-    let browser;
-    try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
-
-        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
-        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-        
-        for (let i = 0; i < clicks; i++) {
-            const dataAntesDoClique = await page.$eval('.date-text', el => el.textContent.trim());
-            console.log(`Avançando do dia '${dataAntesDoClique}'... (Clique ${i + 1}/${clicks})`);
-            await page.click('.arrow-buttons svg:last-child');
-            await page.waitForFunction(
-                (dataAnterior) => document.querySelector('.date-text')?.textContent.trim() !== dataAnterior,
-                { timeout: 20000 },
-                dataAntesDoClique
-            );
-        }
-
-        const dataFinal = await page.$eval('.date-text', el => el.textContent.trim());
-        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-        return { success: true, date: dataFinal, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
+async function getAuthToken() {
+    // Se o token em cache ainda for válido, reutiliza-o
+    if (authTokenCache.token && authTokenCache.expires > Date.now()) {
+        console.log('A usar o token de autenticação em cache.');
+        return authTokenCache.token;
     }
-}
-
-/**
- * Extrai o HTML da agenda do dia ATUAL.
- */
-async function getTodayHTML() {
+    
+    console.log('A iniciar o navegador para capturar um novo token...');
     let browser;
     try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
-        browser = browserInstance;
-
-        const agendaUrl = `${CONFIG.baseUrl}/agendamento`;
-        await page.goto(agendaUrl, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-
-        const dataAtual = await page.$eval('.date-text', el => el.textContent.trim());
-        const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
-        return { success: true, date: dataAtual, html: htmlContent };
-    } finally {
-        if (browser) await browser.close();
-    }
-}
-
-/**
- * Cria um agendamento no sistema.
- * @param {object} data - Contém os dados do agendamento.
- */
-async function createAppointment(data) {
-    let browser;
-    let page;
-    try {
-        const { page: loggedInPage, browser: browserInstance } = await startBrowserAndLogin();
-        page = loggedInPage;
-        browser = browserInstance;
-
-        await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
-        await page.click('.buttons .btn-v2-blue');
+        browser = await puppeteer.launch({
+            headless: 'new',
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
         
-        await page.waitForSelector('#age_id_cliente', { visible: true });
-        console.log('Modal de agendamento carregado.');
+        let token = null;
 
-        console.log(`Buscando cliente: ${data.clientName}`);
-        await page.type('#age_id_cliente', data.clientName, { delay: 100 });
-        await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
-        await page.evaluate((name) => {
-            const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
-            const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
-            if (targetOption) targetOption.click();
-        }, data.clientName);
-        console.log('Cliente selecionado.');
-        
-        const [startHour, startMinute] = data.startTime.split(':').map(Number);
-        const startDate = new Date();
-        startDate.setHours(startHour, startMinute, 0, 0);
-        const endDate = new Date(startDate.getTime() + (data.totalDuration || 30) * 60000);
-        const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        
-        await page.type('input[name="age_data"]', data.date);
-        await page.type('input[name="age_inicio"]', data.startTime);
-        await page.type('input[name="age_fim"]', endTime);
-        console.log(`Horários preenchidos: ${data.startTime} - ${endTime}`);
-        
-        const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
-        if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
-        
-        // --- CORREÇÃO APLICADA AQUI ---
-        // Agora ele procura pela DIV que tem o texto "Profissional", e não mais por uma <label>
-        const professionalSelectXPath = "//div[contains(@class, 'select-v2')][.//div[contains(., 'Profissional')]]//select";
-        await page.waitForXPath(professionalSelectXPath, { visible: true });
-        const professionalSelectHandles = await page.$x(professionalSelectXPath);
-        if (professionalSelectHandles.length === 0) {
-            throw new Error('Não foi possível encontrar o menu dropdown de Profissional.');
-        }
-        await professionalSelectHandles[0].select(professionalId);
-        console.log('Profissional selecionado.');
-        // --- FIM DA CORREÇÃO ---
-
-        console.log('Iniciando adição de serviços...');
-        const serviceInputSelector = '#id_usuario_servico';
-        const addServiceButtonSelector = '.col-sm-1 .btn';
-        const suggestionSelector = '.MuiAutocomplete-popper li';
-        const addedServicesTableSelector = '.table-v2.with-total tbody tr';
-
-        for (let i = 0; i < data.services.length; i++) {
-            const serviceName = data.services[i];
-            const servicesAddedSoFar = i;
-            await page.focus(serviceInputSelector);
-            await page.click(serviceInputSelector, { clickCount: 3 });
-            await page.keyboard.press('Backspace');
-            await page.type(serviceInputSelector, serviceName, { delay: 150 });
-            await page.waitForSelector(suggestionSelector, { visible: true });
-            
-            const clicked = await page.evaluate((name, selector) => {
-                const options = Array.from(document.querySelectorAll(selector));
-                const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
-                if (targetOption) {
-                    targetOption.click();
-                    return true;
+        // "Ouve" as respostas da rede para encontrar a que contém o token de login
+        page.on('response', async (response) => {
+            if (response.url().includes('/api/auth/login') && response.ok()) {
+                const jsonResponse = await response.json();
+                if (jsonResponse.access_token) {
+                    token = jsonResponse.access_token;
                 }
-                return false;
-            }, serviceName, suggestionSelector);
+            }
+        });
 
-            if (!clicked) throw new Error(`Sugestão para o serviço "${serviceName}" não foi encontrada.`);
-            await page.click(addServiceButtonSelector);
-            
-            await page.waitForFunction(
-                (selector, count) => document.querySelectorAll(selector).length === count + 1,
-                { timeout: 10000 },
-                addedServicesTableSelector, servicesAddedSoFar
-            );
-            console.log(`Serviço "${serviceName}" adicionado com sucesso.`);
-        }
-        
-        await page.click('button[type="submit"]');
-        console.log('Botão "Salvar agendamento" clicado.');
+        // Processo de login
+        await page.goto(CONFIG.loginUrl, { waitUntil: 'networkidle2' });
+        await page.waitForSelector('form.kt-form');
+        await page.type('input[name="email"]', CONFIG.credentials.email);
+        await page.type('input[name="password"]', CONFIG.credentials.password);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            page.click('#kt_login_signin_submit')
+        ]);
 
-        await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
-        console.log('Popup de confirmação/erro apareceu.');
+        // Aguarda a captura do token
+        await new Promise((resolve, reject) => {
+            let attempts = 0;
+            const interval = setInterval(() => {
+                if (token) {
+                    clearInterval(interval);
+                    resolve();
+                } else if (attempts > 20) { // Timeout de 10 segundos
+                    clearInterval(interval);
+                    reject(new Error('Não foi possível capturar o token após o login.'));
+                }
+                attempts++;
+            }, 500);
+        });
 
-        const title = await page.$eval('.swal2-title', (el) => el.textContent).catch(() => '');
-        const message = await page.$eval('.swal2-html-container', (el) => el.textContent).catch(() => '');
+        // Guarda o novo token em cache por 50 minutos
+        authTokenCache = { token, expires: Date.now() + 50 * 60 * 1000 };
+        console.log('Novo token capturado e guardado em cache.');
+        return token;
 
-        if (title.toLowerCase().includes('sucesso') || title.toLowerCase().includes('agendado')) {
-            console.log('Mensagem de sucesso encontrada!');
-            return { success: true, message: 'Agendamento criado com sucesso!', data: data };
-        } else {
-            throw new Error(`O site retornou um erro: ${title} - ${message}`);
-        }
-
-    } catch (error) {
-        console.error('ERRO AO CRIAR AGENDAMENTO:', error);
-        throw error;
     } finally {
         if (browser) await browser.close();
     }
 }
 
-// ENDPOINTS DA API
-app.post('/get-today-html', async (req, res) => {
+// FERRAMENTA 1: Encontrar o ID do cliente pelo nome
+app.post('/find-client', async (req, res) => {
+    const { clientName } = req.body;
+    if (!clientName) return res.status(400).json({ success: false, error: 'O nome do cliente é obrigatório.' });
+
     try {
-        const result = await getTodayHTML();
-        res.json(result);
+        const token = await getAuthToken();
+        const response = await axios.post(`${CONFIG.apiUrl}/clientes/simpleList`, 
+            { termo: clientName },
+            { headers: { 'Authorization': `Bearer ${token}` } }
+        );
+        
+        const clients = response.data;
+        if (clients.length === 0) {
+            return res.status(404).json({ success: false, error: `Nenhum cliente encontrado com o nome "${clientName}".` });
+        }
+        
+        console.log(`Cliente encontrado: ${clients[0].cli_name} (ID: ${clients[0].id})`);
+        res.json({ success: true, client: clients[0] });
+
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.post('/get-future-day-html', async (req, res) => {
-    const clicks = req.body.clicks;
-    if (clicks === undefined || clicks < 0) {
-        return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 0 ou mais.' });
+// FERRAMENTA 2: Encontrar IDs de serviços pelo nome
+app.post('/find-services', async (req, res) => {
+    const { professionalId, serviceNames } = req.body;
+    if (!professionalId || !serviceNames || !Array.isArray(serviceNames)) {
+        return res.status(400).json({ success: false, error: 'professionalId e uma lista de serviceNames são obrigatórios.' });
     }
+
     try {
-        const result = await getFutureDateHTML(Number(clicks));
-        res.json(result);
+        const token = await getAuthToken();
+        // Chama a API que lista todos os serviços de um profissional
+        const response = await axios.post(`${CONFIG.apiUrl}/usuarios/servicos/${professionalId}`, {}, {
+             headers: { 'Authorization': `Bearer ${token}` } 
+        });
+
+        const allServices = response.data;
+        // "Traduz" os nomes dos serviços para os seus IDs
+        const foundServices = serviceNames.map(nameToFind => {
+            const found = allServices.find(s => s.ser_nome.toLowerCase() === nameToFind.toLowerCase());
+            return found ? { id: found.id, name: found.ser_nome } : null;
+        }).filter(Boolean);
+
+        if (foundServices.length !== serviceNames.length) {
+             return res.status(404).json({ success: false, error: 'Um ou mais serviços não foram encontrados para este profissional.' });
+        }
+        
+        console.log('Serviços encontrados:', foundServices);
+        res.json({ success: true, services: foundServices });
+
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.post('/create-appointment', async (req, res) => {
-    const appointmentData = req.body;
-    if (!appointmentData.clientName || !appointmentData.professionalName || !appointmentData.date || !appointmentData.startTime || !appointmentData.services) {
-        return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes.' });
-    }
+// FERRAMENTA 3: Criar o agendamento via API
+app.post('/create-appointment-api', async (req, res) => {
+    const { clientId, professionalId, serviceIds, date, startTime, totalDuration, filialId = 22 } = req.body;
+
     try {
-        const result = await createAppointment(appointmentData);
-        res.json(result);
+        const token = await getAuthToken();
+        
+        // Calcula a hora de fim
+        const [startHour, startMinute] = startTime.split(':').map(Number);
+        const startDate = new Date(`${date}T${startTime}:00`);
+        const endDate = new Date(startDate.getTime() + totalDuration * 60000);
+        const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
+
+        // Monta o payload (dados) exatamente como a API espera
+        const payload = {
+            age_id_cliente: clientId,
+            age_id_user: professionalId,
+            age_inicio: `${date} ${startTime}`,
+            age_fim: `${date} ${endTime}`,
+            age_id_filial: filialId,
+            age_tipo: 'Agendamento',
+            servicos: serviceIds
+        };
+        
+        console.log('A enviar payload de agendamento:', payload);
+        const response = await axios.post(`${CONFIG.apiUrl}/agendamentos`, payload, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        res.json({ success: true, message: 'Agendamento criado com sucesso via API!', data: response.data });
+
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const errorMessage = error.response?.data?.errors?.[0] || error.message;
+        console.error("ERRO AO CRIAR AGENDAMENTO VIA API:", errorMessage);
+        res.status(500).json({ success: false, error: `Falha ao criar agendamento: ${errorMessage}` });
     }
 });
 
@@ -256,9 +193,10 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Cash Barber v7.2 - Completo ║
-║    - Buscar Horários (Hoje/Futuro)     ║
-║    - Criar Agendamentos (Robusto)      ║
+║    Serviço de API Cash Barber (vFINAL) ║
+║    - /find-client                      ║
+║    - /find-services                    ║
+║    - /create-appointment-api           ║
 ╚════════════════════════════════════════╝
     `);
 });
