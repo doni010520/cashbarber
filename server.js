@@ -149,9 +149,25 @@ async function createAppointment(data) {
         console.log('Serviços adicionados.');
         
         await page.click('button[type="submit"]');
-        await page.waitForSelector('.modal-dialog', { hidden: true, timeout: 15000 });
-        console.log('Agendamento criado com sucesso!');
+        console.log('Clicou em "Salvar agendamento".');
 
+        // --- CORREÇÃO AQUI ---
+        // Espera inteligente pela confirmação (ou erro)
+        console.log('Aguardando confirmação do site...');
+        await page.waitForFunction(() => {
+            const modalGone = !document.querySelector('.modal-dialog'); // Se o modal sumir
+            const popupVisible = document.querySelector('.swal2-popup'); // Ou se um popup aparecer
+            return modalGone || popupVisible;
+        }, { timeout: 15000 });
+
+        // Verifica se o popup que apareceu é de erro
+        const errorPopup = await page.$('.swal2-error');
+        if (errorPopup) {
+            const errorMessage = await page.$eval('.swal2-content', el => el.textContent);
+            throw new Error(`O site retornou um erro: ${errorMessage}`);
+        }
+
+        console.log('Agendamento criado com sucesso!');
         return { success: true, message: 'Agendamento criado com sucesso!', data };
     } finally {
         if (browser) await browser.close();
@@ -164,7 +180,6 @@ async function createAppointment(data) {
 
 app.post('/get-today-html', async (req, res) => {
     try {
-        // Chama a função de busca com 0 cliques para pegar o dia de hoje
         const result = await getFutureDateHTML(0);
         res.json(result);
     } catch (error) {
@@ -198,7 +213,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Completo Cash Barber (v7.1)   ║
+║    Serviço Completo Cash Barber (v7.2)   ║
 ║    - /get-today-html                   ║
 ║    - /get-future-day-html              ║
 ║    - /create-appointment               ║
