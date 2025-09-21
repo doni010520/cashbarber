@@ -53,7 +53,7 @@ async function startBrowserAndLogin() {
  * Clica N vezes para avançar os dias e extrai o HTML final.
  * @param {number} clicks - O número de cliques para avançar.
  */
-async function getFutureDateHTML(clicks = 0) {
+async function getFutureDateHTML(clicks) {
     let browser;
     try {
         const { page, browser: browserInstance } = await startBrowserAndLogin();
@@ -144,7 +144,7 @@ async function createAppointment(data) {
                 if (target) target.click(); else throw new Error(`Serviço "${name}" não encontrado na lista.`);
             }, serviceName);
             await page.click('.col-sm-1 .btn');
-            await page.waitForTimeout(500);
+            await new Promise(resolve => setTimeout(resolve, 500)); // Pausa para a UI atualizar
         }
         console.log('Serviços adicionados.');
         
@@ -162,10 +162,23 @@ async function createAppointment(data) {
 // === ENDPOINTS ====
 // ==================
 
-app.post('/get-html-by-clicks', async (req, res) => {
-    const clicks = req.body.clicks === undefined ? 0 : Number(req.body.clicks);
+app.post('/get-today-html', async (req, res) => {
     try {
-        const result = await getFutureDateHTML(clicks);
+        // Chama a função de busca com 0 cliques para pegar o dia de hoje
+        const result = await getFutureDateHTML(0);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/get-future-day-html', async (req, res) => {
+    const clicks = req.body.clicks;
+    if (clicks === undefined || clicks < 1) {
+        return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 1 ou mais.' });
+    }
+    try {
+        const result = await getFutureDateHTML(Number(clicks));
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -185,9 +198,10 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Completo Cash Barber (v7)   ║
-║    - Buscar Horários (/get-html-by-clicks)║
-║    - Criar Agendamentos (/create-appointment)║
+║    Serviço Completo Cash Barber (v7.1)   ║
+║    - /get-today-html                   ║
+║    - /get-future-day-html              ║
+║    - /create-appointment               ║
 ╚════════════════════════════════════════╝
     `);
 });
