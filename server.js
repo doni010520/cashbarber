@@ -3,7 +3,6 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 
-// Aplica o Modo Stealth para evitar detecção de robô
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -11,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const CONFIG = {
-    baseUrl: 'https://painel.cashbarber.com.br',
+    baseUrl: 'https://painel.cashberber.com.br',
     credentials: {
         email: process.env.CASH_BARBER_EMAIL || 'elisangela_2011.jesus@hotmail.com',
         password: process.env.CASH_BARBER_PASSWORD || '123456'
@@ -24,9 +23,6 @@ const CONFIG = {
     }
 };
 
-/**
- * Função base para iniciar o navegador e fazer login.
- */
 async function startBrowserAndLogin() {
     console.log('Iniciando navegador e fazendo login...');
     const browser = await puppeteer.launch({
@@ -49,10 +45,6 @@ async function startBrowserAndLogin() {
     return { browser, page };
 }
 
-/**
- * NOVA FUNÇÃO: Cria um agendamento no sistema.
- * @param {object} data - Contém os dados do agendamento.
- */
 async function createAppointment(data) {
     let browser;
     try {
@@ -65,15 +57,9 @@ async function createAppointment(data) {
         
         await page.click('.buttons .btn-v2-blue');
         
-        // ==================================================================
-        // <-- A CORREÇÃO ESTÁ AQUI
-        // Em vez de esperar pelo modal genérico, esperamos diretamente pelo campo do cliente.
-        // Isso garante que o formulário interno esteja 100% pronto.
-        // ==================================================================
         await page.waitForSelector('#age_id_cliente', { visible: true, timeout: 15000 });
-        console.log('Modal de agendamento e formulário carregados.');
+        console.log('Modal de agendamento carregado.');
 
-        // 2. Preencher Cliente (campo de autocompletar)
         console.log(`Buscando cliente: ${data.clientName}`);
         await page.type('#age_id_cliente', data.clientName, { delay: 100 });
         const suggestionSelector = '.MuiAutocomplete-popper li';
@@ -82,10 +68,10 @@ async function createAppointment(data) {
             const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
             const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
             if (targetOption) targetOption.click();
+            else throw new Error(`Sugestão para o cliente "${name}" não foi encontrada.`);
         }, data.clientName);
         console.log('Cliente selecionado.');
 
-        // 3. Preencher Data e Horários
         const startTime = data.startTime;
         const totalDuration = data.totalDuration || 30;
         
@@ -100,14 +86,38 @@ async function createAppointment(data) {
         await page.type('input[name="age_fim"]', endTime);
         console.log(`Horários preenchidos: ${startTime} - ${endTime}`);
 
-        // 4. Selecionar Profissional
+        // ==================================================================
+        // <-- A CORREÇÃO ESTÁ AQUI
+        // Lógica para encontrar o dropdown de profissional pelo seu texto.
+        // ==================================================================
+        console.log(`Selecionando profissional: ${data.professionalName}`);
         const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
-        if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
-        // O seletor foi ajustado para ser mais específico
-        await page.select('div.modal-body > div > div:nth-child(7) > div > div > div > select', professionalId);
-        console.log(`Profissional selecionado: ${data.professionalName}`);
+        if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não foi encontrado na configuração.`);
 
-        // 5. Adicionar Serviços em um loop
+        const selectProfessionalSuccess = await page.evaluate((profId) => {
+            const allLabels = document.querySelectorAll('.select-v2-label');
+            let professionalSelect = null;
+            allLabels.forEach(label => {
+                if (label.textContent.includes('Profissional')) {
+                    professionalSelect = label.closest('.select-v2').querySelector('select');
+                }
+            });
+
+            if (professionalSelect) {
+                professionalSelect.value = profId;
+                const event = new Event('change', { bubbles: true });
+                professionalSelect.dispatchEvent(event);
+                return true;
+            }
+            return false;
+        }, professionalId);
+        
+        if (!selectProfessionalSuccess) {
+            throw new Error('Não foi possível encontrar o menu dropdown de "Profissional".');
+        }
+        console.log('Profissional selecionado com sucesso.');
+        // ==================================================================
+
         for (const serviceName of data.services) {
             console.log(`Adicionando serviço: ${serviceName}`);
             await page.type('#id_usuario_servico', serviceName, { delay: 100 });
@@ -116,17 +126,16 @@ async function createAppointment(data) {
                 const options = Array.from(document.querySelectorAll('.MuiAutocomplete-popper li'));
                 const targetOption = options.find(option => option.textContent.toLowerCase().includes(name.toLowerCase()));
                 if (targetOption) targetOption.click();
+                else throw new Error(`Sugestão para o serviço "${name}" não foi encontrada.`);
             }, serviceName);
-            await page.click('.col-sm-1 .btn'); // Botão "+"
+            await page.click('.col-sm-1 .btn');
             await page.waitForTimeout(500);
         }
         console.log('Todos os serviços foram adicionados.');
 
-        // 6. Salvar o agendamento
         await page.click('button[type="submit"]');
         console.log('Clicou em "Salvar agendamento".');
 
-        // 7. Esperar confirmação
         await page.waitForSelector('.modal-dialog', { hidden: true, timeout: 15000 });
         console.log('Agendamento criado com sucesso!');
 
@@ -140,19 +149,11 @@ async function createAppointment(data) {
     }
 }
 
-// --- Endpoints ---
-// [Mantive os outros endpoints aqui para referência, mas eles não foram alterados]
-
-app.post('/get-today-html', async (req, res) => { /* ... seu código ... */ });
-app.post('/get-future-day-html', async (req, res) => { /* ... seu código ... */ });
+// [Seus outros endpoints como /get-today-html, etc., podem continuar aqui]
 
 app.post('/create-appointment', async (req, res) => {
-    const appointmentData = req.body;
-    if (!appointmentData.clientName || !appointmentData.professionalName || !appointmentData.date || !appointmentData.startTime || !appointmentData.services || !appointmentData.totalDuration) {
-        return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes.' });
-    }
     try {
-        const result = await createAppointment(appointmentData);
+        const result = await createAppointment(req.body);
         res.json(result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -161,11 +162,6 @@ app.post('/create-appointment', async (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-    console.log(`
-╔════════════════════════════════════════╗
-║    Serviço de Automação Cash Barber    ║
-║    (v6.1 - Agendamento Estável)        ║
-╚════════════════════════════════════════╝
-    `);
+    console.log(`Serviço de Automação Cash Barber v6.2 rodando na porta ${PORT}`);
 });
 
