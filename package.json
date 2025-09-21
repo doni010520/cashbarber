@@ -1,21 +1,22 @@
 {
   "name": "cash-barber-automation",
-  "version": "2.0.0",
-  "description": "API de ferramentas para automação do Cash Barber",
+  "version": "9.4.0",
+  "description": "API de automação para Cash Barber com Puppeteer",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "DEBUG=true VERBOSE_LOGS=true node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "puppeteer": "^21.0.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "axios": "^1.6.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "author": "",
+  "license": "MIT"
 }
-
