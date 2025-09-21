@@ -144,10 +144,17 @@ async function createAppointment(data) {
         const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
         if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
         
-        await page.waitForSelector('xpath/.//div[label[contains(., "Profissional")]]//select');
-        const professionalSelectHandle = await page.$('xpath/.//div[label[contains(., "Profissional")]]//select');
-        await professionalSelectHandle.select(professionalId);
+        // --- CORREÇÃO APLICADA AQUI ---
+        // Agora ele procura pela DIV que tem o texto "Profissional", e não mais por uma <label>
+        const professionalSelectXPath = "//div[contains(@class, 'select-v2')][.//div[contains(., 'Profissional')]]//select";
+        await page.waitForXPath(professionalSelectXPath, { visible: true });
+        const professionalSelectHandles = await page.$x(professionalSelectXPath);
+        if (professionalSelectHandles.length === 0) {
+            throw new Error('Não foi possível encontrar o menu dropdown de Profissional.');
+        }
+        await professionalSelectHandles[0].select(professionalId);
         console.log('Profissional selecionado.');
+        // --- FIM DA CORREÇÃO ---
 
         console.log('Iniciando adição de serviços...');
         const serviceInputSelector = '#id_usuario_servico';
@@ -188,7 +195,6 @@ async function createAppointment(data) {
         await page.click('button[type="submit"]');
         console.log('Botão "Salvar agendamento" clicado.');
 
-        // <-- MUDANÇA CRUCIAL: Espera pela confirmação real
         await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
         console.log('Popup de confirmação/erro apareceu.');
 
@@ -199,10 +205,8 @@ async function createAppointment(data) {
             console.log('Mensagem de sucesso encontrada!');
             return { success: true, message: 'Agendamento criado com sucesso!', data: data };
         } else {
-            // Se não for sucesso, consideramos um erro e retornamos a mensagem do site
             throw new Error(`O site retornou um erro: ${title} - ${message}`);
         }
-        // Fim da mudança
 
     } catch (error) {
         console.error('ERRO AO CRIAR AGENDAMENTO:', error);
