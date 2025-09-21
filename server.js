@@ -106,8 +106,10 @@ async function getFutureDateHTML(clicks) {
  */
 async function createAppointment(data) {
     let browser;
+    let page;
     try {
-        const { page, browser: browserInstance } = await startBrowserAndLogin();
+        const { page: loggedInPage, browser: browserInstance } = await startBrowserAndLogin();
+        page = loggedInPage;
         browser = browserInstance;
 
         await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
@@ -135,15 +137,16 @@ async function createAppointment(data) {
         const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
         if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
         
-        // --- CORREÇÃO APLICADA AQUI ---
-        // Encontra todos os menus <select> dentro do modal e seleciona o terceiro (índice 2), que é o de Profissional.
         const allSelects = await page.$$('.modal-body .select-v2 select');
         if (allSelects.length < 3) {
             throw new Error('Não foi possível encontrar o menu dropdown de Profissional.');
         }
         await allSelects[2].select(professionalId);
         console.log('Profissional selecionado.');
-        // --- FIM DA CORREÇÃO ---
+        
+        // --- CORREÇÃO APLICADA AQUI ---
+        // Adiciona uma pausa deliberada para permitir que o site carregue os serviços do profissional.
+        await page.waitForTimeout(1500);
 
         const serviceInputSelector = '#id_usuario_servico';
         const addServiceButtonSelector = '.col-sm-1 .btn';
@@ -155,7 +158,15 @@ async function createAppointment(data) {
             await page.click(serviceInputSelector, { clickCount: 3 });
             await page.keyboard.press('Backspace');
             await page.type(serviceInputSelector, serviceName, { delay: 150 });
-            await page.waitForSelector(suggestionSelector, { visible: true });
+            
+            try {
+                await page.waitForSelector(suggestionSelector, { visible: true, timeout: 10000 });
+            } catch (e) {
+                console.error(`Lista de sugestões para "${serviceName}" não apareceu.`);
+                await page.screenshot({ path: 'debug_servico_falhou.png' });
+                throw new Error(`A lista de sugestões para o serviço "${serviceName}" não apareceu.`);
+            }
+
             await page.click(suggestionSelector);
             await page.click(addServiceButtonSelector);
             await page.waitForFunction(
@@ -179,6 +190,9 @@ async function createAppointment(data) {
         }
 
     } catch (error) {
+        if (page && !page.isClosed()) {
+           await page.screenshot({ path: 'erro_agendamento.png' });
+        }
         throw error;
     } finally {
         if (browser) await browser.close();
@@ -215,7 +229,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Cash Barber v8.1 - Final    ║
+║    Serviço Cash Barber v8.2 - Final    ║
 ║    - Buscar Horários (Hoje/Futuro)     ║
 ║    - Criar Agendamentos (Scraping)     ║
 ╚════════════════════════════════════════╝
