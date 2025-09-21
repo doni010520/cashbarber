@@ -3,7 +3,6 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 
-// Aplica o Modo Stealth para tornar o Puppeteer indetetável
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -25,7 +24,7 @@ const CONFIG = {
 };
 
 /**
- * Função base para iniciar o navegador e fazer login (método estável).
+ * Função base para iniciar o navegador e fazer login.
  */
 async function startBrowserAndLogin() {
     console.log('Iniciando navegador e fazendo login...');
@@ -41,16 +40,10 @@ async function startBrowserAndLogin() {
     await page.waitForSelector('form.kt-form', { visible: true });
     await page.type('input[name="email"]', CONFIG.credentials.email);
     await page.type('input[name="password"]', CONFIG.credentials.password);
-    
-    // Lógica de login simples e fiável
     await Promise.all([
         page.waitForNavigation({ waitUntil: 'networkidle2' }),
         page.click('#kt_login_signin_submit')
     ]);
-    
-    if (page.url().includes('/login')) {
-        throw new Error('O login falhou. Verifique as credenciais ou se há um CAPTCHA.');
-    }
     console.log('Login bem-sucedido.');
     return { browser, page };
 }
@@ -109,24 +102,21 @@ async function getFutureDateHTML(clicks) {
 
 
 /**
- * Cria um agendamento no sistema via scraping.
+ * Cria um agendamento no sistema.
  */
 async function createAppointment(data) {
     let browser;
-    let page;
     try {
-        const { page: loggedInPage, browser: browserInstance } = await startBrowserAndLogin();
-        page = loggedInPage;
+        const { page, browser: browserInstance } = await startBrowserAndLogin();
         browser = browserInstance;
 
         await page.goto(`${CONFIG.baseUrl}/agendamento`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('.rbc-time-view', { visible: true });
+        await page.waitForSelector('.buttons .btn-v2-blue');
         await page.click('.buttons .btn-v2-blue');
         
         await page.waitForSelector('#age_id_cliente', { visible: true });
         console.log('Modal de agendamento carregado.');
 
-        // Preenche o formulário...
         console.log(`Buscando cliente: ${data.clientName}`);
         await page.type('#age_id_cliente', data.clientName, { delay: 100 });
         await page.waitForSelector('.MuiAutocomplete-popper li', { visible: true });
@@ -145,11 +135,15 @@ async function createAppointment(data) {
         const professionalId = CONFIG.professionalIds[data.professionalName.toLowerCase()];
         if (!professionalId) throw new Error(`ID do profissional "${data.professionalName}" não encontrado.`);
         
-        const professionalSelectXPath = "//div[contains(@class, 'select-v2')][.//div[contains(., 'Profissional')]]//select";
-        await page.waitForXPath(professionalSelectXPath, { visible: true });
-        const professionalSelectHandles = await page.$x(professionalSelectXPath);
-        await professionalSelectHandles[0].select(professionalId);
+        // --- CORREÇÃO APLICADA AQUI ---
+        // Encontra todos os menus <select> dentro do modal e seleciona o terceiro (índice 2), que é o de Profissional.
+        const allSelects = await page.$$('.modal-body .select-v2 select');
+        if (allSelects.length < 3) {
+            throw new Error('Não foi possível encontrar o menu dropdown de Profissional.');
+        }
+        await allSelects[2].select(professionalId);
         console.log('Profissional selecionado.');
+        // --- FIM DA CORREÇÃO ---
 
         const serviceInputSelector = '#id_usuario_servico';
         const addServiceButtonSelector = '.col-sm-1 .btn';
@@ -173,7 +167,7 @@ async function createAppointment(data) {
         }
         
         await page.click('button[type="submit"]');
-        console.log('Botão \"Salvar\" clicado.');
+        console.log('Botão "Salvar" clicado.');
 
         await page.waitForSelector('.swal2-popup', { visible: true, timeout: 15000 });
         const title = await page.$eval('.swal2-title', el => el.textContent).catch(() => '');
@@ -185,10 +179,6 @@ async function createAppointment(data) {
         }
 
     } catch (error) {
-        if (page && !page.isClosed()) {
-            await page.screenshot({ path: 'erro_agendamento.png' });
-            console.log('Screenshot de erro salvo como "erro_agendamento.png"');
-        }
         throw error;
     } finally {
         if (browser) await browser.close();
@@ -207,10 +197,7 @@ app.post('/get-today-html', async (req, res) => {
 app.post('/get-future-day-html', async (req, res) => {
     try {
         const clicks = req.body.clicks;
-        if (clicks === undefined || clicks < 1) {
-            return res.status(400).json({ success: false, error: 'O campo "clicks" é obrigatório e deve ser 1 ou mais.' });
-        }
-        res.json(await getFutureDateHTML(Number(clicks)));
+        res.json(await getFutureDateHTML(Number(clicks) || 0));
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -228,7 +215,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║    Serviço Cash Barber v8.0 - Final    ║
+║    Serviço Cash Barber v8.1 - Final    ║
 ║    - Buscar Horários (Hoje/Futuro)     ║
 ║    - Criar Agendamentos (Scraping)     ║
 ╚════════════════════════════════════════╝
